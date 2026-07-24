@@ -1,48 +1,40 @@
 /**
- * dashboard_charts.js — Визуализация для листа Dashboard
+ * charts.js — Визуализация для листа Dashboard
  *
- * Добавить в Apps Script как новый файл "charts".
- * Вызывается автоматически из updateDashboard().
- *
- * Что добавляет:
- *   1. Круговая диаграмма — текущее распределение по классам
- *   2. Столбчатая диаграмма — Текущее % vs Цель % по классам
- *   3. Горизонтальные прогресс-бары по акциям
+ * Графики создаются один раз и больше не пересоздаются — это отслеживается
+ * флагом в Script Properties, а не сравнением заголовков (оказалось ненадёжным).
+ * Позиция и размер, куда бы их ни перетащили руками, сохраняются насовсем.
+ * Сбросить можно только через removeAllCharts() — она же сбрасывает флаг.
  */
 
-// ════════════════════════════════════════════════════════════════════
-// ГЛАВНАЯ ФУНКЦИЯ — вызывается из updateDashboard()
-// Добавь в конец updateDashboard(): addDashboardCharts();
-// ════════════════════════════════════════════════════════════════════
+const CHARTS_INIT_PROP = 'DASHBOARD_CHARTS_INITIALIZED';
 
 function addDashboardCharts() {
-  let ss = SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName(DST.DASHBOARD);
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(DST.DASHBOARD);
   if (!sh) return;
 
-  // Удаляем старые диаграммы
-  let charts = sh.getCharts();
-  charts.forEach(function(c) { sh.removeChart(c); });
+  var helperSheet = getOrCreateHelper_(ss);
+  helperSheet.clearContents();
 
-  // Очищаем вспомогательный лист ОДИН РАЗ (чтобы данные пирога не затёрлись баром)
-  getOrCreateHelper_(ss).clearContents();
-
-  // Читаем данные из листа
-  let data = sh.getDataRange().getValues();
-
-  // Находим строки с данными по классам (ищем по структуре)
-  let classData  = extractClassData_(data);
-  let stockData  = extractStockData_(data);
+  var data = sh.getDataRange().getValues();
+  var classData  = extractClassData_(data);
+  var stockData  = extractStockData_(data);
 
   if (classData.length === 0) return;
 
-  // Диаграмма 1: Круговая — текущее распределение
-  buildPieChart_(ss, sh, classData);
+  // Данные под графиками обновляем всегда — сами графики не трогаем,
+  // если уже были созданы раньше (флаг в Properties).
+  writePieData_(helperSheet, classData);
+  writeBarData_(helperSheet, classData);
 
-  // Диаграмма 2: Столбчатая — текущее vs цель
-  buildBarChart_(ss, sh, classData);
+  var initialized = PropertiesService.getScriptProperties().getProperty(CHARTS_INIT_PROP) === 'true';
+  if (!initialized) {
+    buildPieChart_(sh, helperSheet);
+    buildBarChart_(sh, helperSheet);
+    PropertiesService.getScriptProperties().setProperty(CHARTS_INIT_PROP, 'true');
+  }
 
-  // Диаграмма 3: Прогресс-бары акций (через мини-таблицу)
   if (stockData.length > 0) {
     buildStockProgress_(sh, stockData, data.length);
   }
@@ -50,92 +42,27 @@ function addDashboardCharts() {
   SpreadsheetApp.flush();
 }
 
-
-// ════════════════════════════════════════════════════════════════════
-// ИЗВЛЕЧЕНИЕ ДАННЫХ ИЗ ЛИСТА
-// ════════════════════════════════════════════════════════════════════
-
-function extractClassData_(data) {
-  let result = [];
-  let inClassSection = false;
-
-  for (let i = 0; i < data.length; i++) {
-    let row = data[i];
-    let col0 = String(row[0] || '').trim();
-
-    // Ищем заголовок секции классов
-    if (col0.indexOf('РАСПРЕДЕЛЕНИЕ ПО КЛАССАМ') >= 0) {
-      inClassSection = true;
-      continue;
-    }
-
-    // Строка заголовка таблицы
-    if (inClassSection && col0 === 'Категория') continue;
-
-    // Данные по классам
-    if (inClassSection && col0 && row[1] > 0) {
-      // Проверяем что это строка данных (не заголовок секции акций)
-      if (col0.indexOf('АКЦИИ') >= 0 || col0.indexOf('▌') >= 0) break;
-      result.push({
-        name:    col0,
-        actual:  Number(row[2] || 0) * 100,  // текущий %
-        target:  Number(row[3] || 0) * 100,  // целевой %
-        valueRub: Number(row[1] || 0),
-      });
-    }
-
-    // Конец секции классов
-    if (inClassSection && col0 === '' && result.length > 0) break;
-  }
-
-  return result;
-}
-
-function extractStockData_(data) {
-  let result = [];
-  let inStockSection = false;
-
-  for (let i = 0; i < data.length; i++) {
-    let row = data[i];
-    let col0 = String(row[0] || '').trim();
-
-    if (col0.indexOf('АКЦИИ') >= 0 && col0.indexOf('ДЕТАЛИЗАЦИЯ') >= 0) {
-      inStockSection = true;
-      continue;
-    }
-    if (inStockSection && col0 === 'Название') continue;
-
-    if (inStockSection && col0 && col0 !== '' && row[2] > 0) {
-      result.push({
-        name:    col0.length > 20 ? col0.substring(0, 20) + '…' : col0,
-        actual:  Number(row[3] || 0) * 100,
-        target:  Number(row[4] || 0) * 100,
-      });
-    }
-
-    if (inStockSection && col0 === '' && result.length > 0) break;
-  }
-
-  return result;
-}
-
-
-// ════════════════════════════════════════════════════════════════════
-// ДИАГРАММА 1: КРУГОВАЯ — ТЕКУЩЕЕ РАСПРЕДЕЛЕНИЕ
-// ════════════════════════════════════════════════════════════════════
-
-function buildPieChart_(ss, sh, classData) {
-  // Создаём вспомогательный диапазон данных для диаграммы
-  let helperSheet = getOrCreateHelper_(ss);
-  let pieRows = [['Класс', 'Сумма, ₽']];
+function writePieData_(helperSheet, classData) {
+  var pieRows = [['Класс', 'Сумма, ₽']];
   classData.forEach(function(d) {
     if (d.valueRub > 0) pieRows.push([d.name, d.valueRub]);
   });
+  helperSheet.getRange(1, 1, pieRows.length, 2).setValues(pieRows);
+}
 
-  let pieRange = helperSheet.getRange(1, 1, pieRows.length, 2);
-  pieRange.setValues(pieRows);
+function writeBarData_(helperSheet, classData) {
+  var barRows = [['Класс', 'Текущий %', 'Цель %']];
+  classData.forEach(function(d) {
+    barRows.push([d.name, Math.round(d.actual * 10) / 10, Math.round(d.target * 10) / 10]);
+  });
+  helperSheet.getRange(20, 1, barRows.length, 3).setValues(barRows);
+}
 
-  let chart = sh.newChart()
+function buildPieChart_(sh, helperSheet) {
+  var lastRow = helperSheet.getRange(1, 1, 1, 1).getDataRegion(SpreadsheetApp.Dimension.ROWS).getLastRow();
+  var pieRange = helperSheet.getRange(1, 1, Math.max(lastRow, 2), 2);
+
+  var chart = sh.newChart()
     .setChartType(Charts.ChartType.PIE)
     .addRange(pieRange)
     .setOption('title', 'Распределение портфеля')
@@ -144,28 +71,19 @@ function buildPieChart_(ss, sh, classData) {
     .setOption('pieSliceTextStyle', { fontSize: 10 })
     .setOption('colors', ['#1565c0', '#0d47a1', '#ffd54f', '#43a047', '#ef6c00'])
     .setOption('backgroundColor', '#ffffff')
-    .setPosition(5, 8, 5, 5)   // строка 5, колонка H, отступы 5px
+    .setOption('width', 320)
+    .setOption('height', 240)
+    .setPosition(1, 8, 0, 0)
     .build();
 
   sh.insertChart(chart);
 }
 
+function buildBarChart_(sh, helperSheet) {
+  var lastRow = helperSheet.getRange(20, 1, 1, 1).getDataRegion(SpreadsheetApp.Dimension.ROWS).getLastRow();
+  var barRange = helperSheet.getRange(20, 1, Math.max(lastRow - 19, 2), 3);
 
-// ════════════════════════════════════════════════════════════════════
-// ДИАГРАММА 2: СТОЛБЧАТАЯ — ТЕКУЩЕЕ vs ЦЕЛЬ
-// ════════════════════════════════════════════════════════════════════
-
-function buildBarChart_(ss, sh, classData) {
-  let helperSheet = getOrCreateHelper_(ss);
-  let barRows = [['Класс', 'Текущий %', 'Цель %']];
-  classData.forEach(function(d) {
-    barRows.push([d.name, Math.round(d.actual * 10) / 10, Math.round(d.target * 10) / 10]);
-  });
-
-  let barRange = helperSheet.getRange(20, 1, barRows.length, 3);
-  barRange.setValues(barRows);
-
-  let chart = sh.newChart()
+  var chart = sh.newChart()
     .setChartType(Charts.ChartType.COLUMN)
     .addRange(barRange)
     .setOption('title', 'Текущее vs Цель (%)')
@@ -175,41 +93,75 @@ function buildBarChart_(ss, sh, classData) {
     .setOption('backgroundColor', '#ffffff')
     .setOption('vAxis', { title: '%', minValue: 0, maxValue: 90 })
     .setOption('hAxis', { textStyle: { fontSize: 9 } })
-    .setPosition(5, 14, 5, 5)  // строка 5, колонка N
+    .setOption('width', 340)
+    .setOption('height', 240)
+    .setPosition(1, 14, 0, 0)
     .build();
 
   sh.insertChart(chart);
 }
 
+function extractClassData_(data) {
+  var result = [];
+  var inClassSection = false;
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var col0 = String(row[0] || '').trim();
+    if (col0.indexOf('РАСПРЕДЕЛЕНИЕ ПО КЛАССАМ') >= 0) { inClassSection = true; continue; }
+    if (inClassSection && col0 === 'Категория') continue;
+    if (inClassSection && col0 && row[1] > 0) {
+      if (col0.indexOf('АКЦИИ') >= 0 || col0.indexOf('▌') >= 0) break;
+      result.push({
+        name: col0,
+        actual: Number(row[2] || 0) * 100,
+        target: Number(row[3] || 0) * 100,
+        valueRub: Number(row[1] || 0),
+      });
+    }
+    if (inClassSection && col0 === '' && result.length > 0) break;
+  }
+  return result;
+}
 
-// ════════════════════════════════════════════════════════════════════
-// ДИАГРАММА 3: ПРОГРЕСС-БАРЫ АКЦИЙ
-// ════════════════════════════════════════════════════════════════════
+function extractStockData_(data) {
+  var result = [];
+  var inStockSection = false;
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var col0 = String(row[0] || '').trim();
+    if (col0.indexOf('АКЦИИ') >= 0 && col0.indexOf('ДЕТАЛИЗАЦИЯ') >= 0) { inStockSection = true; continue; }
+    if (inStockSection && col0 === 'Название') continue;
+    if (inStockSection && col0 && col0 !== '' && row[2] > 0) {
+      result.push({
+        name: col0.length > 20 ? col0.substring(0, 20) + '…' : col0,
+        actual: Number(row[3] || 0) * 100,
+        target: Number(row[4] || 0) * 100,
+      });
+    }
+    if (inStockSection && col0 === '' && result.length > 0) break;
+  }
+  return result;
+}
 
 function buildStockProgress_(sh, stockData, startRow) {
-  // Рисуем мини-таблицу прогресс-баров через условное форматирование
-  let pr = startRow + 3; // строка после основной таблицы
-
+  var pr = startRow + 3;
   sh.getRange(pr, 1, 1, 8).merge()
     .setValue('▌ АКЦИИ — ПРОГРЕСС К ЦЕЛИ')
     .setBackground(C.MID).setFontColor('#ffffff').setFontWeight('bold');
   pr++;
-
   sh.getRange(pr, 1).setValue('Акция');
   sh.getRange(pr, 2).setValue('Текущий %');
   sh.getRange(pr, 3).setValue('Цель %');
   sh.getRange(pr, 4, 1, 5).merge().setValue('Прогресс');
-  sh.getRange(pr, 1, 1, 8)
-    .setBackground(C.DARK).setFontColor('#ffffff').setFontWeight('bold');
+  sh.getRange(pr, 1, 1, 8).setBackground(C.DARK).setFontColor('#ffffff').setFontWeight('bold');
   pr++;
 
   stockData.forEach(function(stock, idx) {
-    let bg = idx % 2 === 0 ? C.EVEN : C.ODD;
-    let progress = stock.target > 0 ? Math.min(stock.actual / stock.target, 1) : 0;
-    let pctText  = (stock.actual).toFixed(1) + '% / ' + (stock.target).toFixed(1) + '%';
-    let bars     = Math.round(progress * 20); // макс 20 блоков
-    let barStr   = '█'.repeat(bars) + '░'.repeat(20 - bars);
-    let barColor = progress >= 0.9 ? '#1b5e20' : progress >= 0.5 ? '#f57f17' : '#b71c1c';
+    var bg = idx % 2 === 0 ? C.EVEN : C.ODD;
+    var progress = stock.target > 0 ? Math.min(stock.actual / stock.target, 1) : 0;
+    var bars = Math.round(progress * 20);
+    var barStr = '█'.repeat(bars) + '░'.repeat(20 - bars);
+    var barColor = progress >= 0.9 ? '#1b5e20' : progress >= 0.5 ? '#f57f17' : '#b71c1c';
 
     sh.getRange(pr, 1).setValue(stock.name).setBackground(bg);
     sh.getRange(pr, 2).setValue(stock.actual / 100).setNumberFormat('0.0%').setBackground(bg);
@@ -218,36 +170,25 @@ function buildStockProgress_(sh, stockData, startRow) {
       .setValue(barStr + '  ' + Math.round(progress * 100) + '%')
       .setBackground(bg).setFontColor(barColor)
       .setFontFamily('Courier New').setFontSize(9);
-
     pr++;
   });
 }
 
-
-// ════════════════════════════════════════════════════════════════════
-// ВСПОМОГАТЕЛЬНЫЙ СКРЫТЫЙ ЛИСТ ДЛЯ ДАННЫХ ДИАГРАММ
-// ════════════════════════════════════════════════════════════════════
-
 function getOrCreateHelper_(ss) {
-  let name = '_chart_data';
-  let sh   = ss.getSheetByName(name);
+  var name = '_chart_data';
+  var sh = ss.getSheetByName(name);
   if (!sh) {
     sh = ss.insertSheet(name);
     sh.hideSheet();
   }
-  // Не очищаем здесь - очистка делается один раз в addDashboardCharts
   return sh;
 }
 
-
-// ════════════════════════════════════════════════════════════════════
-// УДАЛИТЬ ВСЕ ДИАГРАММЫ (утилита на случай если надо сбросить)
-// ════════════════════════════════════════════════════════════════════
-
 function removeAllCharts() {
-  let ss = SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName(DST.DASHBOARD);
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(DST.DASHBOARD);
   if (!sh) return;
   sh.getCharts().forEach(function(c) { sh.removeChart(c); });
-  SpreadsheetApp.getUi().alert('✅ Все диаграммы удалены.');
+  PropertiesService.getScriptProperties().deleteProperty(CHARTS_INIT_PROP);
+  SpreadsheetApp.getUi().alert('✅ Все диаграммы удалены. Флаг сброшен — при следующем обновлении Dashboard графики создадутся заново.');
 }

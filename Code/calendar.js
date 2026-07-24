@@ -23,33 +23,33 @@
 // ════════════════════════════════════════════════════════════════════
 
 function updateCalendarSheet() {
-  let ss = SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName(DST.CALENDAR);
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(DST.CALENDAR);
   if (!sh) sh = ss.insertSheet(DST.CALENDAR);
   sh.clearContents();
   sh.clearFormats();
 
-  let tz  = Session.getScriptTimeZone();
-  let now = new Date();
-  let nowStr = Utilities.formatDate(now, tz, 'dd.MM.yyyy HH:mm');
+  var tz  = Session.getScriptTimeZone();
+  var now = new Date();
+  var nowStr = Utilities.formatDate(now, tz, 'dd.MM.yyyy HH:mm');
 
   // Читаем позиции
-  let bondPositions  = readSheetPositions_('Дан_Облигации');
-  let sharePositions = readSheetPositions_('Дан_Акции');
-  let figiMap        = buildFigiMap_();
-  let divMap         = readDividendsFromConfig_();
+  var bondPositions  = readSheetPositions_('_Дан_Облигации');
+  var sharePositions = readSheetPositions_('_Дан_Акции');
+  var figiMap        = buildFigiMap_();
+  var divMap         = readDividendsFromConfig_();
 
   // Собираем расписание выплат
-  let couponPayments   = fetchCouponCalendar_(bondPositions, figiMap);
-  let dividendPayments = fetchDividendCalendar_(sharePositions, divMap, figiMap);
-  let allPayments      = couponPayments.concat(dividendPayments);
+  var couponPayments   = fetchCouponCalendar_(bondPositions, figiMap);
+  var dividendPayments = fetchDividendCalendar_(sharePositions, divMap, figiMap);
+  var allPayments      = couponPayments.concat(dividendPayments);
 
   // Строим месячные итоги
-  let monthlyGrid = buildMonthlyGrid_(allPayments, now);
+  var monthlyGrid = buildMonthlyGrid_(allPayments, now);
 
   // Рендерим лист
-  let r    = 1;
-  let COLS = 7;
+  var r    = 1;
+  var COLS = 7;
 
   // ── Шапка ─────────────────────────────────────────────────────────
   mergedCell_(sh, r, 1, 1, COLS,
@@ -71,42 +71,43 @@ function updateCalendarSheet() {
     ['Месяц', 'Купоны, ₽', 'Дивиденды, ₽', 'Итого, ₽', 'Прогресс', '', ''],
     COLS);
   r++;
+let monthlyDataStartRow = r; // запоминаем начало данных для графика
 
   // Находим максимум для прогресс-баров
-  let maxMonthly = 0;
+  var maxMonthly = 0;
   Object.keys(monthlyGrid).forEach(function(m) {
-    let tot = (monthlyGrid[m].coupons || 0) + (monthlyGrid[m].dividends || 0);
+    var tot = (monthlyGrid[m].coupons || 0) + (monthlyGrid[m].dividends || 0);
     if (tot > maxMonthly) maxMonthly = tot;
   });
 
-  let MONTH_NAMES = [
+  var MONTH_NAMES = [
     'Январь','Февраль','Март','Апрель','Май','Июнь',
     'Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'
   ];
 
-  let yearCoupons   = 0;
-  let yearDividends = 0;
+  var yearCoupons   = 0;
+  var yearDividends = 0;
 
-  for (let mi = 0; mi < 12; mi++) {
-    let monthIdx  = ((now.getMonth() + mi) % 12) + 1; // 1-12
-    let yearOffset = (now.getMonth() + mi) >= 12 ? 1 : 0;
-    let dispYear  = now.getFullYear() + yearOffset;
-    let grid      = monthlyGrid[monthIdx + '_' + dispYear] || { coupons: 0, dividends: 0 };
-    let couponAmt = grid.coupons   || 0;
-    let divAmt    = grid.dividends || 0;
-    let total     = couponAmt + divAmt;
+  for (var mi = 0; mi < 12; mi++) {
+    var monthIdx  = ((now.getMonth() + mi) % 12) + 1; // 1-12
+    var yearOffset = (now.getMonth() + mi) >= 12 ? 1 : 0;
+    var dispYear  = now.getFullYear() + yearOffset;
+    var grid      = monthlyGrid[monthIdx + '_' + dispYear] || { coupons: 0, dividends: 0 };
+    var couponAmt = grid.coupons   || 0;
+    var divAmt    = grid.dividends || 0;
+    var total     = couponAmt + divAmt;
 
     yearCoupons   += couponAmt;
     yearDividends += divAmt;
 
     // Прогресс-бар
-    let barLen  = maxMonthly > 0 ? Math.round((total / maxMonthly) * 20) : 0;
-    let barStr  = '█'.repeat(barLen) + '░'.repeat(20 - barLen);
-    let barColor = total > 5000 ? '#1b5e20' : total > 2000 ? '#f57f17' : '#9e9e9e';
+    var barLen  = maxMonthly > 0 ? Math.round((total / maxMonthly) * 20) : 0;
+    var barStr  = '█'.repeat(barLen) + '░'.repeat(20 - barLen);
+    var barColor = total > 5000 ? '#1b5e20' : total > 2000 ? '#f57f17' : '#9e9e9e';
 
     // Подсветка текущего месяца
-    let isCurrentMonth = (monthIdx === now.getMonth() + 1 && dispYear === now.getFullYear());
-    let bg = isCurrentMonth ? '#e8f5e9' : (mi % 2 === 0 ? C.EVEN : C.ODD);
+    var isCurrentMonth = (monthIdx === now.getMonth() + 1 && dispYear === now.getFullYear());
+    var bg = isCurrentMonth ? '#e8f5e9' : (mi % 2 === 0 ? C.EVEN : C.ODD);
 
     sh.getRange(r, 1).setValue(MONTH_NAMES[monthIdx - 1] + ' ' + dispYear)
       .setBackground(bg).setFontWeight(isCurrentMonth ? 'bold' : 'normal');
@@ -121,8 +122,10 @@ function updateCalendarSheet() {
     r++;
   }
 
+buildIncomeChart_(sh, monthlyDataStartRow); 
+
   // Итоговая строка
-  let yearTotal = yearCoupons + yearDividends;
+  var yearTotal = yearCoupons + yearDividends;
   sh.getRange(r, 1, 1, COLS).merge()
     .setValue('ИТОГО ЗА 12 МЕСЯЦЕВ:   купоны ' + rub_(yearCoupons) +
               '  +  дивиденды ' + rub_(yearDividends) +
@@ -133,17 +136,17 @@ function updateCalendarSheet() {
 
   // ── Все будущие выплаты (12 месяцев, без дублирования) ──────────
   // 🟡 Строки с выплатами в ближайшие 7 дней подсвечены жёлтым
-  let allFuture = allPayments
+  var allFuture = allPayments
     .filter(function(p) { return p.date && p.date >= now; })
     .sort(function(a, b) { return a.date - b.date; });
 
   mergedCell_(sh, r, 1, 1, COLS,
     '▌ ВСЕ ВЫПЛАТЫ — следующие 12 месяцев (' + allFuture.length + ' выплат)' +
-    '   |   🟡 жёлтым = ближайшие 7 дней',
+    '   |   🟢 купон (точно)   🟡 дивиденд (оценка)   |   жирная дата = ближайшие 7 дней',
     { bg: '#37474f', fg: '#ffffff', bold: true });
   r++;
 
-  let paymentsHeaderRow = r; // запоминаем строку заголовка для фильтра
+  let paymentsHeaderRow = r;
   hdrRow_(sh, r,
     ['Дата', 'Инструмент', 'Тип', '₽ / шт', 'Кол-во', 'Итого, ₽', 'Месяц'],
     COLS);
@@ -151,18 +154,21 @@ function updateCalendarSheet() {
 
   allFuture.forEach(function(p, idx) {
     let monthStr  = MONTH_NAMES[p.date.getMonth()] + ' ' + p.date.getFullYear();
-    let bg        = idx % 2 === 0 ? C.EVEN : C.ODD;
+    let isCoupon  = p.type.indexOf('Купон') === 0;
+    let bg        = isCoupon
+      ? (idx % 2 === 0 ? '#e8f5e9' : '#f1f8f2')
+      : (idx % 2 === 0 ? '#fff8e1' : '#fffdf0');
     let daysLeft  = Math.ceil((p.date - now) / (24 * 3600 * 1000));
     let urgent    = daysLeft <= 7;
 
-    sh.getRange(r, 1).setValue(p.date).setNumberFormat('dd.mm.yyyy').setBackground(urgent ? '#fff9c4' : bg);
+    sh.getRange(r, 1).setValue(p.date).setNumberFormat('dd.mm.yyyy').setBackground(bg);
     sh.getRange(r, 2, 1, COLS - 1).setValues([[
       p.name, p.type,
       Math.round(p.perUnit * 100) / 100,
       p.qty,
       Math.round(p.total),
       monthStr
-    ]]).setBackground(urgent ? '#fff9c4' : bg);
+    ]]).setBackground(bg);
 
     sh.getRange(r, 4).setNumberFormat('#,##0.00 [$₽-ru-RU]');
     sh.getRange(r, 6).setNumberFormat('#,##0 [$₽-ru-RU]');
@@ -178,7 +184,7 @@ function updateCalendarSheet() {
 
   // Добавляем фильтр на таблицу выплат (чтобы можно было фильтровать по месяцу/инструменту)
   try {
-    let existingFilter = sh.getFilter();
+    var existingFilter = sh.getFilter();
     if (existingFilter) existingFilter.remove();
     // Фильтр на всю таблицу (от строки заголовка до конца данных)
     sh.getRange(paymentsHeaderRow, 1, allFuture.length + 1, COLS).createFilter();
@@ -199,27 +205,27 @@ function updateCalendarSheet() {
  * через GetBondCoupons. Возвращаем массив платежей с точными датами.
  */
 function fetchCouponCalendar_(bondPositions, figiMap) {
-  let now  = new Date();
-  let in1y = new Date(now.getTime() + 366 * 24 * 3600 * 1000);
-  let payments = [];
+  var now  = new Date();
+  var in1y = new Date(now.getTime() + 366 * 24 * 3600 * 1000);
+  var payments = [];
 
   bondPositions.forEach(function(p) {
-    let figi = p.figi || figiMap[p.name] || figiMap[p.ticker] || '';
+    var figi = p.figi || figiMap[p.name] || figiMap[p.ticker] || '';
     if (!figi) return;
 
     try {
-      let resp = tiFetch_(
+      var resp = tiFetch_(
         '/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetBondCoupons',
         { figi: figi, from: now.toISOString(), to: in1y.toISOString() }
       );
 
-      let events = resp.events || [];
+      var events = resp.events || [];
       events.forEach(function(c) {
         // Дата купона
-        let dateRaw = c.couponDate;
+        var dateRaw = c.couponDate;
         if (!dateRaw) return;
 
-        let payDate;
+        var payDate;
         if (typeof dateRaw === 'string') {
           payDate = new Date(dateRaw);
         } else if (dateRaw.seconds) {
@@ -231,7 +237,7 @@ function fetchCouponCalendar_(bondPositions, figiMap) {
         if (isNaN(payDate.getTime())) return;
         if (payDate < now) return; // пропускаем прошедшие
 
-        let perUnit = moneyToNumber_(c.payOneBond || c.couponAmount || null);
+        var perUnit = moneyToNumber_(c.payOneBond || c.couponAmount || null);
         if (perUnit <= 0) return;
 
         payments.push({
@@ -271,13 +277,19 @@ function fetchDividendCalendar_(sharePositions, divMap, figiMap) {
 
   sharePositions.forEach(function(p) {
     let divData = findDividend_(p.name, p.ticker, divMap);
-    if (!divData || divData.amount <= 0) return; // нет дивидендов
-
     let figi = p.figi || figiMap[p.name] || figiMap[p.ticker] || '';
+
+    // Если в Config пусто — считаем автоматически из истории (та же логика, что в income.js)
+    if ((!divData || divData.amount <= 0) && figi) {
+      let hist = fetchAnnualDividendFromHistory_(figi);
+      if (hist.perUnit > 0) divData = { amount: hist.perUnit, note: hist.note };
+    }
+
+    if (!divData || divData.amount <= 0) return; // реально нет дивидендов
+
     let payMonth = null;
     let payYear  = now.getFullYear();
 
-    // Пытаемся получить типичный месяц из истории
     if (figi) {
       try {
         let from2y = new Date(now.getTime() - 2 * 365 * 24 * 3600 * 1000);
@@ -287,7 +299,6 @@ function fetchDividendCalendar_(sharePositions, divMap, figiMap) {
         );
         let divs = resp.dividends || [];
         if (divs.length > 0) {
-          // Берём последнюю выплату, смотрим месяц
           let lastDiv = divs[divs.length - 1];
           let dateRaw = lastDiv.paymentDate || lastDiv.recordDate;
           if (dateRaw) {
@@ -298,12 +309,9 @@ function fetchDividendCalendar_(sharePositions, divMap, figiMap) {
               histDate = new Date(Number(dateRaw.seconds) * 1000);
             }
             if (histDate && !isNaN(histDate.getTime())) {
-              payMonth = histDate.getMonth(); // 0-11
-              // Если исторический месяц уже прошёл в этом году → следующий год
+              payMonth = histDate.getMonth();
               let estimDate = new Date(payYear, payMonth, 15);
-              if (estimDate < now) {
-                payYear = payYear + 1;
-              }
+              if (estimDate < now) payYear = payYear + 1;
             }
           }
         }
@@ -313,16 +321,13 @@ function fetchDividendCalendar_(sharePositions, divMap, figiMap) {
       }
     }
 
-    if (payMonth === null) {
-      // Месяц неизвестен — добавляем без конкретной даты (не войдёт в список по датам)
-      return;
-    }
+    if (payMonth === null) return;
 
-    let estimatedDate = new Date(payYear, payMonth, 15); // примерно 15-е число
+    let estimatedDate = new Date(payYear, payMonth, 15);
     payments.push({
       name:    p.name,
       ticker:  p.ticker,
-      type:    'Дивиденд ~',  // ~ означает приблизительно
+      type:    'Дивиденд ~',
       date:    estimatedDate,
       perUnit: divData.amount,
       qty:     p.qty,
@@ -343,15 +348,15 @@ function fetchDividendCalendar_(sharePositions, divMap, figiMap) {
  * Возвращает объект: { "1_2026": {coupons: X, dividends: Y}, ... }
  */
 function buildMonthlyGrid_(payments, fromDate) {
-  let grid = {};
+  var grid = {};
 
   payments.forEach(function(p) {
     if (!p.date || isNaN(p.date.getTime())) return;
     if (p.date < fromDate) return;
 
-    let month  = p.date.getMonth() + 1; // 1-12
-    let year   = p.date.getFullYear();
-    let key    = month + '_' + year;
+    var month  = p.date.getMonth() + 1; // 1-12
+    var year   = p.date.getFullYear();
+    var key    = month + '_' + year;
 
     if (!grid[key]) {
       grid[key] = { coupons: 0, dividends: 0 };
@@ -365,4 +370,36 @@ function buildMonthlyGrid_(payments, fromDate) {
   });
 
   return grid;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// ГРАФИК ДОХОДА ПО МЕСЯЦАМ
+// ════════════════════════════════════════════════════════════════════
+
+function buildIncomeChart_(sh, dataStartRow) {
+  sh.getCharts().forEach(function(c) { sh.removeChart(c); });
+
+  let range = sh.getRange(dataStartRow - 1, 1, 13, 3);
+
+  let chart = sh.newChart()
+    .setChartType(Charts.ChartType.COLUMN)
+    .addRange(range)
+    .setOption('isStacked', true)
+    .setOption('title', 'Пассивный доход по месяцам')
+    .setOption('titleTextStyle', { fontSize: 13, bold: true, color: '#1a237e' })
+    .setOption('legend', { position: 'top', textStyle: { fontSize: 12 } })
+    .setOption('series', {
+      0: { labelInLegend: 'Купоны, ₽' },
+      1: { labelInLegend: 'Дивиденды, ₽' }
+    })
+    .setOption('colors', ['#43a047', '#fbc02d'])
+    .setOption('backgroundColor', '#ffffff')
+    .setOption('vAxis', { title: '₽' })
+    .setOption('hAxis', { textStyle: { fontSize: 9 } })
+    .setOption('width', 620)
+    .setOption('height', 340)
+    .setPosition(6, 9, 0, 0)
+    .build();
+
+  sh.insertChart(chart);
 }

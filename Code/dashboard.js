@@ -1,23 +1,6 @@
 /**
  * ╔═══════════════════════════════════════════════════════════════════╗
  * ║  dashboard.js — Дашборд портфеля                                 ║
- * ║  Работает поверх Jeanorochka/tinvest-google-sheets-portfolio     ║
- * ║                                                                   ║
- * ║  УСТАНОВКА (5 шагов):                                            ║
- * ║  1. В Google Sheets: Расширения → Apps Script                    ║
- * ║  2. Создайте новый файл: + → Скрипт → назовите "dashboard"      ║
- * ║  3. Вставьте весь этот код                                       ║
- * ║  4. В файле tinvest.js найдите функцию onOpen() и удалите её    ║
- * ║     (dashboard.js создаёт общее меню вместо неё)                ║
- * ║  5. Обновите страницу — появится меню "Tinkoff"                  ║
- * ║                                                                   ║
- * ║  ПЕРВЫЙ ЗАПУСК:                                                   ║
- * ║  Tinkoff → ⚙️ Инициализировать Config                            ║
- * ║  Tinkoff → 🔄 Синхронизировать + обновить всё                    ║
- * ║                                                                   ║
- * ║  ТРИГГЕР (автообновление раз в час):                             ║
- * ║  Apps Script → Триггеры → + → syncAndRefresh →                  ║
- * ║  Time-driven → Hour timer → Every hour                           ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  */
 
@@ -25,15 +8,13 @@
 // 1. КОНСТАНТЫ
 // ════════════════════════════════════════════════════════════════════
 
-/** Листы из tinvest.js — НЕ переименовывать */
 const SRC = {
-  SHARES:  'Дан_Акции',
-  BONDS:   'Дан_Облигации',
-  ETFS:    'Дан_Фонды',
-  MONEY:   'Дан_Деньги',
+  SHARES:  '_Дан_Акции',
+  BONDS:   '_Дан_Облигации',
+  ETFS:    '_Дан_Фонды',
+  MONEY:   '_Дан_Деньги',
 };
 
-/** Листы дашборда */
 const DST = {
   CONFIG:    'Настройки',
   DASHBOARD: 'Дашборд',
@@ -41,48 +22,78 @@ const DST = {
   INCOME:    'Ожидаемый доход',
   CALENDAR:  'Календарь выплат',
   HISTORY:   'История операций',
-  POSITIONS: 'Позиции',
+  POSITIONS: '_Позиции',
 };
 
-/** Цвета */
 const C = {
-  DARK:     '#1a237e',   // тёмно-синий (шапка)
-  MID:      '#283593',   // синий (секции)
-  OK:       '#1b5e20',   // зелёный  — отклонение ≤ 1.5 пп
-  WARN:     '#e65100',   // оранжевый — 1.5–3 пп
-  CRIT:     '#b71c1c',   // красный   — > 3 пп
+  DARK:     '#1a237e',
+  MID:      '#283593',
+  OK:       '#1b5e20',
+  WARN:     '#e65100',
+  CRIT:     '#b71c1c',
   ODD:      '#f5f5f5',
   EVEN:     '#ffffff',
-  SKIP:     '#9e9e9e',   // серый — пропущенная позиция
-  INPUT:    '#fff9c4',   // жёлтый — ячейка ввода
+  SKIP:     '#9e9e9e',
+  INPUT:    '#fff9c4',
 };
 
-/** Пороги отклонения (процентных пунктов) */
-const THR = { OK: 1.5, WARN: 3.0 };
+const THR = { OK: 1.5, WARN: 3.0 }; // оставлено для совместимости, больше не используется напрямую
+const THR_525 = { critAbs: 5.0, critRel: 0.25, warnAbs: 2.5, warnRel: 0.125 };
+
+function deviationStatus_(actPct, tgtPct) {
+  let params = readAdvancedParams_();
+  let absDiffPP = Math.abs(actPct - tgtPct) * 100;
+  let relDiff   = tgtPct > 0 ? Math.abs(actPct - tgtPct) / tgtPct : 0;
+
+  let isCrit = absDiffPP >= params.thrAbs || relDiff >= params.thrRel;
+  let isWarn = absDiffPP >= params.thrAbs / 2 || relDiff >= params.thrRel / 2;
+
+  if (isCrit) return { clr: C.CRIT, txt: '🔴 Требует внимания' };
+  if (isWarn) return { clr: C.WARN, txt: '⚠️ Умеренно' };
+  return { clr: C.OK, txt: '✅ Норма' };
+}
 
 
 // ════════════════════════════════════════════════════════════════════
-// 2. МЕНЮ (заменяет onOpen из tinvest.js)
+// 2. МЕНЮ
 // ════════════════════════════════════════════════════════════════════
-
 
 function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('Tinkoff')
-    .addItem('🔄  Синхронизировать позиции (T-Invest API)',   'syncTinkoffPositions')
-    .addSeparator()
-    .addItem('⚙️  Инициализировать Config (первый запуск)',   'initConfig')
-    .addItem('📊  Обновить Dashboard',                        'updateDashboard')
-    .addItem('💰  Пересчитать калькулятор пополнения',        'calculateRebalance')
-    .addSeparator()
-    .addItem('🚀  Синхронизировать + обновить всё',           'syncAndRefresh')
-    .addSeparator()
-    .addItem('💵  Обновить Ожидаемый доход',                  'updateIncomeSheet')
-    .addItem('➕  Добавить блок дивидендов в Config',         'addDividendsBlock')
-    .addSeparator()
-    .addItem('📅  Обновить Календарь выплат',                 'updateCalendarSheet')
-    .addItem('📋  Обновить Историю операций', 'updateHistorySheet')
-    .addToUi();
+  let ui = SpreadsheetApp.getUi();
+  let menu = ui.createMenu('Tinkoff');
+
+  menu.addItem('🔄  Синхронизировать позиции', 'syncTinkoffPositions')
+      .addItem('🚀  Синхронизировать + обновить всё', 'syncAndRefresh')
+      .addSeparator();
+
+  menu.addSubMenu(ui.createMenu('📊 Дашборд и ребаланс')
+        .addItem('Обновить Dashboard', 'updateDashboard')
+        .addItem('Рассчитать доходность (XIRR + IMOEX)', 'calculateAnalytics')
+        .addItem('Пересчитать калькулятор пополнения', 'calculateRebalance')
+        .addItem('Прогресс к цели', 'calculateGoalProgress'))
+      .addSubMenu(ui.createMenu('💰 Доход и история')
+        .addItem('Обновить Ожидаемый доход', 'updateIncomeSheet')
+        .addItem('Обновить Календарь выплат', 'updateCalendarSheet')
+        .addItem('Обновить Историю операций', 'updateHistorySheet'))
+      .addSubMenu(ui.createMenu('🎯 Аналитика (вручную)')
+        .addItem('Средняя цена и P/L', 'calculateAveragePriceAndPL')
+        .addItem('Yield on Cost', 'calculateYieldOnCost')
+        .addItem('Health check концентрации', 'calculateConcentrationHealth')
+        .addItem('ИИС-3 — вычет за год', 'calculateIisDeductionUsage')
+        .addItem('Дисциплина пополнений', 'calculateContributionDiscipline'))
+      .addSubMenu(ui.createMenu('📄 Отчёты')
+        .addItem('Сформировать годовой отчёт', 'generateAnnualReport')
+        .addItem('Открыть HTML-дашборд', 'showHtmlDashboard'))
+      .addSeparator()
+      .addSubMenu(ui.createMenu('⚙️ Настройки')
+        .addItem('Инициализировать Config', 'initConfig')
+        .addItem('Добавить блок дивидендов', 'addDividendsBlock')
+        .addItem('Добавить блок продвинутых параметров', 'addAdvancedParamsBlock')
+        .addItem('Добавить блок ИИС-3', 'addIisBlock')
+        .addItem('Добавить блок цели портфеля', 'addGoalBlock'));
+        
+
+  menu.addToUi();
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -105,64 +116,61 @@ function initConfig() {
     sh = ss.insertSheet(DST.CONFIG);
   }
 
-  // ── Данные ────────────────────────────────────────────────────────
   let rows = [
-    // Блок 1: Целевые доли по классам
     ['▌ ЦЕЛЕВАЯ СТРУКТУРА ПОРТФЕЛЯ (% от всего портфеля)', '', ''],
     ['Категория',        'Цель %', 'Счёт'],
-    ['Акции',            40,       'ИИС-3'],
-    ['Облигации',        40,       'ИИС-3'],
-    ['Золото',           10,       'ИИС-3'],
-    ['Замещайки',         5,       'ИИС-3'],
-    ['Денежный рынок',    5,       'Брокерский'],
+    ['Акции',            '',       ''],
+    ['Облигации',        '',       ''],
+    ['Золото',           '',       ''],
+    ['Замещайки',        '',       ''],
+    ['Денежный рынок',   '',       ''],
     ['', '', ''],
 
-    // Блок 2: Целевые доли акций
     ['▌ ЦЕЛЕВЫЕ ДОЛИ АКЦИЙ (% от всего портфеля)', '', ''],
-    ['Название (точно как в Positions_Aggregated)',  'Цель %', 'Тикер'],
-    ['Сбербанк',                    6,     'SBER'],
-    ['Лукойл',                      6,     'LKOH'],
-    ['Т-Технологии',                5,     'T'],
-    ['Полюс',                       5,     'PLZL'],
-    ['ЯНДЕКС ао01',                 4.5,   'YDEX'],
-    ['КЦ ИКС 5',                    4,     'X5'],
-    ['ФосАгро',                     3.5,   'PHOR'],
-    ['Positive Technologies',       3,     'POSI'],
-    ['Озон ао01',                   3,     'OZON'],
+    ['Название (точно как в разделе «Акции — детализация» на Дашборде)',  'Цель %', 'Тикер'],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
+    ['', '', ''],
     ['', '', ''],
 
-    // Блок 3: Маппинг спецкатегорий
-    ['▌ МАППИНГ СПЕЦКАТЕГОРИЙ — заполните точные названия из Positions_Aggregated', '', ''],
+    ['▌ МАППИНГ СПЕЦКАТЕГОРИЙ — заполните точные названия из раздела «Акции — детализация» на Дашборде', '', ''],
     ['Название инструмента',                    'Категория',         'Комментарий'],
-    ['паи ЗПИФ нд Т-КапитЛужникиКолл',         'Золото',            '← ВИМ фонд золота'],
+    ['',                                         'Золото',            '← Укажите, где храните золото (например, фонд ВИМ или другой)'],
     ['',                                         'Замещайки',         '← Укажите замещающую облигацию'],
     ['',                                         'Денежный рынок',    '← Укажите фонд денежного рынка'],
   ];
 
   sh.getRange(1, 1, rows.length, 3).setValues(rows);
 
-  // Форматирование заголовков блоков
-  [[1, C.DARK], [9, C.DARK], [21, C.DARK]].forEach(function(pair) {
+  [[1, C.DARK], [9, C.DARK], [23, C.DARK]].forEach(function(pair) {
     sh.getRange(pair[0], 1, 1, 3).merge()
       .setBackground(pair[1]).setFontColor('#ffffff')
       .setFontWeight('bold').setFontSize(11);
   });
 
-  // Форматирование строк-заголовков таблиц
-  [[2, C.MID], [10, C.MID], [22, C.MID]].forEach(function(pair) {
+  [[2, C.MID], [10, C.MID], [24, C.MID]].forEach(function(pair) {
     sh.getRange(pair[0], 1, 1, 3)
       .setBackground(pair[1]).setFontColor('#ffffff').setFontWeight('bold');
   });
 
   sh.setColumnWidth(1, 320);
   sh.setColumnWidth(2, 90);
-  sh.setColumnWidth(3, 200);
+  sh.setColumnWidth(3, 260);
+  sh.getRange(1, 3, sh.getLastRow(), 1).setWrap(true);
 
-  // Автоматически добавляем Блок 4 (дивиденды) при первоначальной настройке
   if (typeof addDividendsBlock === 'function') {
     addDividendsBlock();
   }
-
+  if (typeof addAdvancedParamsBlock === 'function') addAdvancedParamsBlock();
+  if (typeof addGoalBlock === 'function') addGoalBlock();
   SpreadsheetApp.getUi().alert(
     '✅ Config создан! Блок дивидендов добавлен автоматически.\n\n' +
     '⚠️  Важно: проверьте точные названия инструментов в Блоке 3 —\n' +
@@ -182,7 +190,6 @@ function readConfig_() {
 
   let v = sh.getDataRange().getValues();
 
-  // Классы: строки 3–7 (индексы 2–6)
   let classTargets = {};
   for (let i = 2; i <= 6 && i < v.length; i++) {
     let cat = String(v[i][0]).trim();
@@ -190,17 +197,15 @@ function readConfig_() {
     if (cat && !isNaN(pct) && pct > 0) classTargets[cat] = pct / 100;
   }
 
-  // Акции: строки 11–19 (индексы 10–18)
   let stockTargets = {};
-  for (let j = 10; j <= 18 && j < v.length; j++) {
+  for (let j = 10; j <= 21 && j < v.length; j++) {
     let sName = String(v[j][0]).trim();
     let sPct  = Number(v[j][1]);
     if (sName && !isNaN(sPct) && sPct > 0) stockTargets[sName] = sPct / 100;
   }
 
-  // Маппинг: строки 23+ (индексы 22+)
   let mapping = {};
-  for (let k = 22; k < v.length; k++) {
+  for (let k = 24; k < v.length; k++) {
     let mName = String(v[k][0]).trim();
     if (mName.indexOf('ДИВИДЕНДЫ') >= 0) break;
     let mCat  = String(v[k][1]).trim();
@@ -234,7 +239,6 @@ function readPositions_(config) {
     let data = sh.getDataRange().getValues();
     if (data.length < 2) continue;
 
-    // Индексируем заголовок
     let H = {};
     for (let hi = 0; hi < data[0].length; hi++) {
       H[String(data[0][hi]).trim()] = hi;
@@ -251,7 +255,6 @@ function readPositions_(config) {
 
       if (!name || valueRub === 0) continue;
 
-      // Категория: сначала маппинг из Config, потом дефолт по типу
       let category = config.mapping[name] || src.defaultCat;
 
       positions.push({
@@ -297,7 +300,6 @@ function updateDashboard() {
   let COLS     = 6;
   let r        = 1;
 
-  // ── Шапка ─────────────────────────────────────────────────────────
   mergedCell_(sh, r, 1, 1, COLS,
     '📊  ДАШБОРД ПОРТФЕЛЯ',
     { bg: C.DARK, fg: '#ffffff', bold: true, size: 14, align: 'center' });
@@ -308,7 +310,6 @@ function updateDashboard() {
     { bg: '#263238', fg: '#b0bec5', align: 'center' });
   r += 2;
 
-  // ── Блок: по классам ──────────────────────────────────────────────
   mergedCell_(sh, r, 1, 1, COLS, '▌ РАСПРЕДЕЛЕНИЕ ПО КЛАССАМ',
     { bg: C.MID, fg: '#ffffff', bold: true });
   r++;
@@ -325,27 +326,22 @@ function updateDashboard() {
     let actPct  = totalRub > 0 ? actual / totalRub : 0;
     let tgtPct  = config.classTargets[cat] || 0;
     let diff    = actPct - tgtPct;
-    let absDiff = Math.abs(diff) * 100;
-    let txt     = absDiff <= THR.OK   ? '✅ Норма'
-                : absDiff <= THR.WARN ? '⚠️ Умеренно'
-                : '🔴 Требует внимания';
-    let clr     = absDiff <= THR.OK ? C.OK : absDiff <= THR.WARN ? C.WARN : C.CRIT;
+    let status  = deviationStatus_(actPct, tgtPct);
     let bg      = idx % 2 === 0 ? C.EVEN : C.ODD;
 
     sh.getRange(r, 1, 1, COLS)
-      .setValues([[cat, actual, actPct, tgtPct, diff, txt]])
+      .setValues([[cat, actual, actPct, tgtPct, diff, status.txt]])
       .setBackground(bg);
     sh.getRange(r, 2).setNumberFormat('#,##0 [$₽-ru-RU]');
     sh.getRange(r, 3).setNumberFormat('0.0%');
     sh.getRange(r, 4).setNumberFormat('0.0%');
     sh.getRange(r, 5).setNumberFormat('+0.0%;-0.0%;0.0%')
-                     .setFontColor(clr).setFontWeight('bold');
-    sh.getRange(r, 6).setFontColor(clr).setFontWeight('bold');
+                     .setFontColor(status.clr).setFontWeight('bold');
+    sh.getRange(r, 6).setFontColor(status.clr).setFontWeight('bold');
     r++;
   });
   r++;
 
-  // ── Блок: акции ───────────────────────────────────────────────────
   mergedCell_(sh, r, 1, 1, COLS, '▌ АКЦИИ — ДЕТАЛИЗАЦИЯ',
     { bg: C.MID, fg: '#ffffff', bold: true });
   r++;
@@ -362,8 +358,7 @@ function updateDashboard() {
     let actPct  = totalRub > 0 ? p.valueRub / totalRub : 0;
     let tgtPct  = findTarget_(p.name, p.ticker, config.stockTargets);
     let diff    = actPct - tgtPct;
-    let absDiff = Math.abs(diff) * 100;
-    let clr     = absDiff <= THR.OK ? C.OK : absDiff <= THR.WARN ? C.WARN : C.CRIT;
+    let status  = deviationStatus_(actPct, tgtPct);
     let bg      = idx % 2 === 0 ? C.EVEN : C.ODD;
 
     sh.getRange(r, 1, 1, COLS)
@@ -373,33 +368,32 @@ function updateDashboard() {
     sh.getRange(r, 4).setNumberFormat('0.0%');
     sh.getRange(r, 5).setNumberFormat('0.0%');
     sh.getRange(r, 6).setNumberFormat('+0.0%;-0.0%;0.0%')
-                     .setFontColor(clr).setFontWeight('bold');
+                     .setFontColor(status.clr).setFontWeight('bold');
     r++;
   });
 
-  // ── Ширина колонок ────────────────────────────────────────────────
   [260, 70, 155, 105, 80, 145].forEach(function(w, i) {
     sh.setColumnWidth(i + 1, w);
   });
   sh.setFrozenRows(4);
   addDashboardCharts();
+  calculateAnalytics();
+  calculateContributionDiscipline();
+  calculateConcentrationHealth();
   SpreadsheetApp.flush();
 }
-
 
 
 // ════════════════════════════════════════════════════════════════════
 // 8. ЕДИНАЯ СИНХРОНИЗАЦИЯ (для триггера)
 // ════════════════════════════════════════════════════════════════════
 
-/**
- * Запускайте этим триггером раз в час.
- * Rebalance не трогается — пересчитывается только вручную.
- */
 function syncAndRefresh() {
-  syncTinkoffPositions();  // из tinvest.js
+  syncTinkoffPositions();
   updateDashboard();
-  hideDataSheets(false);  // скрываем технические листы (без всплывающего окна)
+  updateIncomeSheet();
+  updateCalendarSheet();
+  hideDataSheets(false);
 }
 
 
@@ -407,10 +401,6 @@ function syncAndRefresh() {
 // 9. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ════════════════════════════════════════════════════════════════════
 
-/**
- * Читает из листа Rebalance список имён, у которых чекбокс (колонка F) = true.
- * Вызывается ДО clearContents(), чтобы не потерять состояние.
- */
 function readSkipped_(sh) {
   try {
     let data = sh.getDataRange().getValues();
@@ -418,7 +408,6 @@ function readSkipped_(sh) {
     for (let i = 0; i < data.length; i++) {
       if (data[i][5] === true) {
         let name = String(data[i][0]).trim();
-        // Исключаем строки-заголовки
         if (name && name !== 'Категория' && name !== 'Название') {
           result.push(name);
         }
@@ -430,9 +419,6 @@ function readSkipped_(sh) {
   }
 }
 
-/**
- * Ищет целевую долю акции по имени (точное → частичное совпадение).
- */
 function findTarget_(name, ticker, stockTargets) {
   if (stockTargets[name] !== undefined) return stockTargets[name];
   let nl = name.toLowerCase();
@@ -444,9 +430,6 @@ function findTarget_(name, ticker, stockTargets) {
   return 0;
 }
 
-/**
- * Ищет позицию в массиве по имени (частичное совпадение).
- */
 function matchPos_(positions, name) {
   let nl = name.toLowerCase();
   for (let i = 0; i < positions.length; i++) {
@@ -456,13 +439,11 @@ function matchPos_(positions, name) {
   return null;
 }
 
-/** Форматирование числа в рубли (без Intl, работает везде). */
 function rub_(amount) {
   let n = Math.round(amount);
   return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0') + '\u00a0₽';
 }
 
-/** Создаёт объединённую ячейку с форматированием. */
 function mergedCell_(sh, row, col, rows, cols, value, fmt) {
   let rng = sh.getRange(row, col, rows, cols).merge().setValue(value);
   if (fmt.bg)     rng.setBackground(fmt.bg);
@@ -473,7 +454,6 @@ function mergedCell_(sh, row, col, rows, cols, value, fmt) {
   if (fmt.italic) rng.setFontStyle('italic');
 }
 
-/** Строка заголовка таблицы. */
 function hdrRow_(sh, row, headers, cols) {
   sh.getRange(row, 1, 1, cols).setValues([headers])
     .setBackground(C.DARK).setFontColor('#ffffff').setFontWeight('bold');
@@ -489,14 +469,12 @@ function allocateWithLots_(budget, stockNeed, skipped) {
     return skipped.indexOf(n) === -1 && stockNeed[n].need > 0;
   });
 
-  // Шаг 1: пропорциональные аллокации по дефициту
   let totalNeed = activeNames.reduce(function(s, n) { return s + stockNeed[n].need; }, 0);
   let allocs = {};
   activeNames.forEach(function(n) {
     allocs[n] = totalNeed > 0 ? (stockNeed[n].need / totalNeed) * budget : 0;
   });
 
-  // Шаг 2: округляем вниз до целых лотов, считаем остаток
   let results = {};
   let remainder = budget;
 
@@ -511,10 +489,9 @@ function allocateWithLots_(budget, stockNeed, skipped) {
       return;
     }
     if (price <= 0 || lotCost <= 0) {
-      // Цена неизвестна (акция ещё не куплена) — показываем пропорциональный бюджет
       let myAllocUnk = allocs[n] || 0;
       results[n] = { lots: '?', actualAlloc: myAllocUnk, lotCost: 0, unknown: true };
-      remainder  -= myAllocUnk;  // деньги "зарезервированы" под эту бумагу
+      remainder  -= myAllocUnk;
       return;
     }
 
@@ -525,7 +502,6 @@ function allocateWithLots_(budget, stockNeed, skipped) {
     remainder  -= actualAlloc;
   });
 
-  // Шаг 3: итеративно докидываем остаток самым отстающим
   let maxIter = 20;
   while (remainder > 0.01 && maxIter > 0) {
     maxIter--;
@@ -562,7 +538,6 @@ function calculateRebalance() {
   let sh = ss.getSheetByName(DST.REBALANCE);
   if (!sh) sh = ss.insertSheet(DST.REBALANCE);
 
-  // ⚠️ Читаем данные ДО очистки листа
   let amount  = 0;
   let skipped = [];
   try {
@@ -582,7 +557,6 @@ function calculateRebalance() {
   let COLS      = 7;
   let r         = 1;
 
-  // ── Шапка ─────────────────────────────────────────────────────────
   mergedCell_(sh, r, 1, 1, COLS, '💰  КАЛЬКУЛЯТОР ПОПОЛНЕНИЯ',
     { bg: C.DARK, fg: '#ffffff', bold: true, size: 14, align: 'center' });
   r++;
@@ -607,12 +581,11 @@ function calculateRebalance() {
 
   let newTotal = totalRub + amount;
 
-  // ── Блок: классы ──────────────────────────────────────────────────
   mergedCell_(sh, r, 1, 1, COLS, '▌ РАСПРЕДЕЛЕНИЕ ПО КЛАССАМ',
     { bg: C.MID, fg: '#ffffff', bold: true });
   r++;
   hdrRow_(sh, r,
-    ['Категория', 'Текущий %', 'Цель %', 'Отклонение', 'Рекомендуется, ₽', '⬛ Пропустить', ''],
+    ['Категория', 'Текущий %', 'Цель %', 'Отклонение', 'Рекомендуется, ₽', '⬛ Пропустить', 'Статус'],
     COLS);
   r++;
 
@@ -643,6 +616,7 @@ function calculateRebalance() {
     let diff    = actPct - tgtPct;
     let alloc   = classAlloc[cat];
     let isSkip  = skipped.indexOf(cat) !== -1;
+    let status  = deviationStatus_(actPct, tgtPct);
     let bg      = idx % 2 === 0 ? C.EVEN : C.ODD;
 
     sh.getRange(r, 1, 1, 5)
@@ -650,15 +624,16 @@ function calculateRebalance() {
       .setBackground(bg);
     sh.getRange(r, 2).setNumberFormat('0.0%');
     sh.getRange(r, 3).setNumberFormat('0.0%');
-    sh.getRange(r, 4).setNumberFormat('+0.0%;-0.0%;0.0%');
+    sh.getRange(r, 4).setNumberFormat('+0.0%;-0.0%;0.0%')
+                     .setFontColor(status.clr).setFontWeight('bold');
     sh.getRange(r, 5).setNumberFormat('#,##0 [$₽-ru-RU]');
     if (isSkip) sh.getRange(r, 1, 1, 5).setFontColor(C.SKIP);
     sh.getRange(r, 6).insertCheckboxes().setValue(isSkip);
+    sh.getRange(r, 7).setValue(status.txt).setFontColor(status.clr).setFontWeight('bold');
     r++;
   });
   r++;
 
-  // ── Блок: акции с умным распределением лотов ──────────────────────
   let stockBudget = classAlloc['Акции'] || 0;
   let sharePos    = positions.filter(function(p) { return p.category === 'Акции'; });
 
@@ -722,7 +697,6 @@ function calculateRebalance() {
     r++;
   });
 
-  // ── Блок: другие категории ───────────────────────────────────────
   let otherCats   = ['Золото', 'Замещайки', 'Денежный рынок'];
   let otherBudget = otherCats.reduce(function(s,c){ return s + (classAlloc[c]||0); }, 0);
 
@@ -743,7 +717,6 @@ function calculateRebalance() {
     let tgtPct   = config.classTargets[cat] || 0;
     let isSkip   = skipped.indexOf(cat) !== -1;
     let catPos   = positions.filter(function(p){ return p.category === cat; });
-    // Берём инструмент с наибольшей ценой (фонд, а не кэш/дешёвый ETF)
     catPos.sort(function(a, b) { return (b.price || 0) - (a.price || 0); });
     let instrName  = catPos.length > 0 ? catPos[0].name : '—';
     let instrPrice = catPos.length > 0 ? catPos[0].price : 0;
@@ -782,7 +755,6 @@ function calculateRebalance() {
     r++;
   });
 
-  // Облигации — предупреждение "не докупать"
   let bndActual = positions.filter(function(p){ return p.category === 'Облигации'; })
                            .reduce(function(s,p){ return s + p.valueRub; }, 0);
   let bndActPct = totalRub > 0 ? bndActual / totalRub : 0;
@@ -798,14 +770,13 @@ function calculateRebalance() {
   sh.getRange(r, 7).setFontColor(C.CRIT).setFontWeight('bold');
   r++;
 
+  sh.getRange(1, 7, sh.getLastRow(), 1).setWrap(true); // колонка «Комментарий»
   colWidths_(sh);
-  SpreadsheetApp.flush();
 }
 
 
-/** Стандартная ширина колонок для Rebalance. */
 function colWidths_(sh) {
-  [250, 80, 110, 85, 175, 125, 95].forEach(function(w, i) {
+  [250, 80, 110, 85, 175, 125, 260].forEach(function(w, i) {
     sh.setColumnWidth(i + 1, w);
   });
 }

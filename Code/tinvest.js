@@ -21,18 +21,18 @@ const BASES = [
   'https://invest-public-api.tbank.ru/rest',
   'https://invest-public-api.tinkoff.ru/rest', // fallback
 ];
-const RAW_SHEET = 'Позиции'; // должно совпадать с DST.POSITIONS в dashboard.gs
-const AGG_SHEET = 'Позиции_Сводка';
-const SUMMARY_BY_TYPE_SHEET = 'Свод_по_типам';
+const RAW_SHEET = '_Позиции';
+const AGG_SHEET = '_Позиции_Сводка';
+const SUMMARY_BY_TYPE_SHEET = '_Свод_по_типам';
 
 const TYPE_SHEETS = {
-  Shares:     'Дан_Акции',
-  Bonds:      'Дан_Облигации',
-  ETFs:       'Дан_Фонды',
-  Currencies: 'Дан_Валюта',
-  Futures:    'Дан_Фьючерсы',
-  Other:      'Дан_Прочее',
-  Money:      'Дан_Деньги',
+  Shares:     '_Дан_Акции',
+  Bonds:      '_Дан_Облигации',
+  ETFs:       '_Дан_Фонды',
+  Currencies: '_Дан_Валюта',
+  Futures:    '_Дан_Фьючерсы',
+  Other:      '_Дан_Прочее',
+  Money:      '_Дан_Деньги',
 };
 
 const CACHE_TTL_SEC = 6 * 3600; // 6 часов кэш справочника

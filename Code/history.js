@@ -1,23 +1,23 @@
 /**
- * history.js — История операций
+ * history.js — История операций (с автопродолжением при таймауте)
  *
- * Автоматически подтягивает все операции со всех счетов
- * через T-Invest API (GetOperationsByCursor).
+ * Данные копятся построчно в скрытом листе _history_raw_ops, пока не
+ * обработаны все счета. Если скрипт близко к 6-минутному лимиту —
+ * сохраняет прогресс, ставит одноразовый триггер на продолжение через
+ * минуту и завершается. Финальная красивая таблица собирается только
+ * после того, как все данные собраны целиком.
  *
- * Типы операций:
- *   Пополнение, Вывод, Покупка, Продажа, Купон, Дивиденд, Комиссия
- *
- * Добавить в onOpen():
- *   .addItem('📋  Обновить Историю операций', 'updateHistorySheet')
- *
- * Зависимости: tiFetch_(), moneyToNumber_() — tinvest.gs
- *              C, DST, rub_(), mergedCell_(), hdrRow_() — dashboard.gs
+ * Зависимости: tiFetch_(), moneyToNumber_() — tinvest.js
+ *              C, DST, rub_(), mergedCell_(), hdrRow_() — dashboard.js
+ *              withLock_() — lock.js
  */
 
-// Название листа берётся из DST.HISTORY (dashboard.gs)
-const HISTORY_MONTHS = 12; // глубина истории в месяцах (можно увеличить до 24)
+const HISTORY_MONTHS = 12;
+const HISTORY_RAW_SHEET       = '_history_raw_ops';
+const HISTORY_PROGRESS_PROP   = 'HISTORY_FETCH_PROGRESS';
+const HISTORY_RUNNING_PROP    = 'HISTORY_FETCH_RUNNING';
+const HISTORY_TIME_LIMIT_MS   = 5 * 60 * 1000; // запас в минуту от лимита в 6
 
-// Маппинг типов операций из API → понятные названия
 const OP_TYPES = {
   'OPERATION_TYPE_BUY':                  'Покупка',
   'OPERATION_TYPE_SELL':                 'Продажа',
@@ -35,7 +35,6 @@ const OP_TYPES = {
   'OPERATION_TYPE_BOND_REPAYMENT_TAX':   'Налог (погашение)',
 };
 
-// Типы которые показываем (остальные фильтруем)
 const OP_SHOW = [
   'OPERATION_TYPE_BUY', 'OPERATION_TYPE_SELL',
   'OPERATION_TYPE_BUY_CARD', 'OPERATION_TYPE_SELL_CARD',
@@ -45,26 +44,260 @@ const OP_SHOW = [
   'OPERATION_TYPE_BOND_REPAYMENT',
 ];
 
-// Цвета по типу операции
 const OP_COLORS = {
-  'Покупка':              '#e3f2fd',  // светло-синий
-  'Продажа':              '#e8f5e9',  // светло-зелёный
-  'Пополнение':           '#f3e5f5',  // светло-фиолетовый
-  'Вывод':                '#fff3e0',  // светло-оранжевый
-  'Купон':                '#e8f5e9',  // светло-зелёный
-  'Дивиденд':             '#e8f5e9',  // светло-зелёный
-  'Комиссия':             '#fce4ec',  // светло-красный
-  'Погашение облигации':  '#e1f5fe',  // голубой
+  'Покупка':              '#e3f2fd',
+  'Продажа':              '#e8f5e9',
+  'Пополнение':           '#f3e5f5',
+  'Вывод':                '#fff3e0',
+  'Купон':                '#e8f5e9',
+  'Дивиденд':             '#e8f5e9',
+  'Комиссия':             '#fce4ec',
+  'Погашение облигации':  '#e1f5fe',
 };
 
 
 // ════════════════════════════════════════════════════════════════════
-// ГЛАВНАЯ ФУНКЦИЯ
+// ТОЧКА ВХОДА С МЕНЮ
 // ════════════════════════════════════════════════════════════════════
 
 function updateHistorySheet() {
-  let ss  = SpreadsheetApp.getActive();
-  let sh  = ss.getSheetByName(DST.HISTORY);
+  let running = PropertiesService.getScriptProperties().getProperty(HISTORY_RUNNING_PROP);
+  if (running === 'true') {
+    SpreadsheetApp.getUi().alert(
+      '⏳ Загрузка истории уже идёт в фоне (продолжится автоматически через триггер).\n' +
+      'Просто подожди — таблица обновится сама, когда всё будет собрано.'
+    );
+    return;
+  }
+  withLock_('Обновить историю операций', function() {
+    clearHistoryTriggers_();
+    PropertiesService.getScriptProperties().deleteProperty(HISTORY_PROGRESS_PROP);
+    PropertiesService.getScriptProperties().setProperty(HISTORY_RUNNING_PROP, 'true');
+    historyFetchStep_();
+  });
+}
+
+// Вызывается автоматически триггером при продолжении после паузы
+function continueHistoryFetch_() {
+  withLock_('Продолжение загрузки истории', historyFetchStep_);
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// ОСНОВНОЙ ШАГ ЗАГРУЗКИ (с проверкой времени и возможной паузой)
+// ════════════════════════════════════════════════════════════════════
+
+function historyFetchStep_() {
+  let startTime = new Date().getTime();
+  let ss = SpreadsheetApp.getActive();
+  let rawSh = getOrCreateRawHistorySheet_(ss);
+
+  let accounts = getAccounts_();
+  if (!accounts.length) {
+    finishHistoryRun_(false, 'Не удалось получить список счетов.');
+    return;
+  }
+
+  let toDate   = new Date();
+  let fromDate = new Date(toDate.getTime() - HISTORY_MONTHS * 30 * 24 * 3600 * 1000);
+
+  let progressRaw = PropertiesService.getScriptProperties().getProperty(HISTORY_PROGRESS_PROP);
+  let progress = progressRaw ? JSON.parse(progressRaw) : { accountIdx: 0, cursor: '' };
+
+  for (let ai = progress.accountIdx; ai < accounts.length; ai++) {
+    let acc = accounts[ai];
+    let cursor = ai === progress.accountIdx ? progress.cursor : '';
+
+    while (true) {
+      let page = fetchOperationsPage_(acc.id, acc.name, fromDate, toDate, cursor);
+      if (page.ops.length) appendRawOps_(rawSh, page.ops);
+
+      if (new Date().getTime() - startTime > HISTORY_TIME_LIMIT_MS) {
+        let nextCursor = page.hasNext ? page.nextCursor : '';
+        let nextAi = page.hasNext ? ai : ai + 1;
+        PropertiesService.getScriptProperties().setProperty(HISTORY_PROGRESS_PROP,
+          JSON.stringify({ accountIdx: nextAi, cursor: page.hasNext ? nextCursor : '' }));
+        scheduleHistoryContinuation_();
+        return; // пауза — продолжим по триггеру
+      }
+
+      if (page.hasNext && page.nextCursor) {
+        cursor = page.nextCursor;
+      } else {
+        break; // счёт закончен, переходим к следующему
+      }
+    }
+  }
+
+  // Все счета обработаны — собираем финальную таблицу
+  finishHistoryRun_(true, null);
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// ОДНА СТРАНИЦА ЗАПРОСА (без внутреннего цикла — для резюмируемости)
+// ════════════════════════════════════════════════════════════════════
+
+function fetchOperationsPage_(accountId, accountName, fromDate, toDate, cursor) {
+  let body = {
+    accountId: accountId,
+    from:      fromDate.toISOString(),
+    to:        toDate.toISOString(),
+    limit:     1000,
+    operationTypes: OP_SHOW,
+  };
+  if (cursor) body.cursor = cursor;
+
+  let resp;
+  try {
+    resp = tiFetch_(
+      '/tinkoff.public.invest.api.contract.v1.OperationsService/GetOperationsByCursor',
+      body
+    );
+  } catch (e) {
+    console.warn('История: ошибка для счёта ' + accountId + ': ' + e.message);
+    return { ops: [], hasNext: false, nextCursor: '' };
+  }
+
+  let items = resp.items || [];
+  let ops = [];
+  items.forEach(function(item) {
+    let op = parseOperation_(item, accountId, accountName);
+    if (op) ops.push(op);
+  });
+
+  return { ops: ops, hasNext: !!(resp.hasNext && resp.nextCursor), nextCursor: resp.nextCursor || '' };
+}
+
+function parseOperation_(item, accountId, accountName) {
+  let type = item.type || item.operationType || '';
+  if (!type) return null;
+
+  let dateRaw = item.date;
+  let date;
+  if (typeof dateRaw === 'string') date = new Date(dateRaw);
+  else if (dateRaw && dateRaw.seconds) date = new Date(Number(dateRaw.seconds) * 1000);
+  else return null;
+  if (isNaN(date.getTime())) return null;
+
+  let amount = 0;
+  if (item.payment)    amount = moneyToNumber_(item.payment);
+  else if (item.price) amount = moneyToNumber_(item.price);
+
+  let commission = null;
+  if (item.commission && moneyToNumber_(item.commission) !== 0) {
+    commission = Math.abs(moneyToNumber_(item.commission));
+  }
+
+  let price = null;
+  if (item.price && item.quantity) price = moneyToNumber_(item.price);
+
+  let quantity = null;
+  if (item.quantity && Number(item.quantity) > 0) quantity = Number(item.quantity);
+
+  let instrName = item.name || item.instrumentName || '';
+  if (!instrName && item.figi) instrName = item.figi;
+
+  return {
+    date: date, accountId: accountId, accountName: accountName, type: type,
+    instrumentName: instrName, quantity: quantity,
+    price: price ? Math.round(price * 100) / 100 : null,
+    amount: Math.round(Math.abs(amount) * 100) / 100,
+    commission: commission ? Math.round(commission * 100) / 100 : null,
+    note: item.description || '',
+  };
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// СКРЫТЫЙ ЛИСТ-НАКОПИТЕЛЬ (переживает паузы между запусками)
+// ════════════════════════════════════════════════════════════════════
+
+function getOrCreateRawHistorySheet_(ss) {
+  let sh = ss.getSheetByName(HISTORY_RAW_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(HISTORY_RAW_SHEET);
+    sh.hideSheet();
+  }
+  return sh;
+}
+
+function appendRawOps_(sh, ops) {
+  let rows = ops.map(function(op) {
+    return [op.date, op.accountName, op.type, op.instrumentName,
+            op.quantity, op.price, op.amount, op.commission, op.note];
+  });
+  if (!rows.length) return;
+  let startRow = sh.getLastRow() + 1;
+  sh.getRange(startRow, 1, rows.length, 9).setValues(rows);
+}
+
+function readRawOps_(sh) {
+  let lastRow = sh.getLastRow();
+  if (lastRow < 1) return [];
+  let data = sh.getRange(1, 1, lastRow, 9).getValues();
+  return data.map(function(row) {
+    return {
+      date: row[0] instanceof Date ? row[0] : new Date(row[0]),
+      accountName: row[1], type: row[2], instrumentName: row[3],
+      quantity: row[4] || null, price: row[5] || null,
+      amount: row[6], commission: row[7] || null, note: row[8] || '',
+    };
+  });
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// ТРИГГЕР ПРОДОЛЖЕНИЯ
+// ════════════════════════════════════════════════════════════════════
+
+function scheduleHistoryContinuation_() {
+  clearHistoryTriggers_();
+  ScriptApp.newTrigger('continueHistoryFetch_')
+    .timeBased().after(60 * 1000).create();
+}
+
+function clearHistoryTriggers_() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'continueHistoryFetch_') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// ЗАВЕРШЕНИЕ: СБОРКА ФИНАЛЬНОЙ ТАБЛИЦЫ
+// ════════════════════════════════════════════════════════════════════
+
+function finishHistoryRun_(success, errorMsg) {
+  let props = PropertiesService.getScriptProperties();
+  clearHistoryTriggers_();
+  props.deleteProperty(HISTORY_PROGRESS_PROP);
+  props.deleteProperty(HISTORY_RUNNING_PROP);
+
+  let ss = SpreadsheetApp.getActive();
+
+  if (!success) {
+    let sh = ss.getSheetByName(DST.HISTORY);
+    if (!sh) sh = ss.insertSheet(DST.HISTORY);
+    sh.getRange(1, 1).setValue('⚠️ ' + errorMsg);
+    return;
+  }
+
+  let rawSh = ss.getSheetByName(HISTORY_RAW_SHEET);
+  let allOps = rawSh ? readRawOps_(rawSh) : [];
+  allOps.sort(function(a, b) { return b.date - a.date; });
+
+  renderHistorySheet_(allOps);
+
+  // Очищаем накопитель — данные уже перенесены в финальную таблицу
+  if (rawSh) rawSh.clearContents();
+}
+
+function renderHistorySheet_(allOps) {
+  let ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(DST.HISTORY);
   if (!sh) sh = ss.insertSheet(DST.HISTORY);
   sh.clearContents();
   sh.clearFormats();
@@ -72,31 +305,11 @@ function updateHistorySheet() {
   let tz  = Session.getScriptTimeZone();
   let now = new Date();
   let nowStr = Utilities.formatDate(now, tz, 'dd.MM.yyyy HH:mm');
-
-  // Период выборки
-  let fromDate = new Date(now.getTime() - HISTORY_MONTHS * 30 * 24 * 3600 * 1000);
-
-  // Получаем все счета
   let accounts = getAccounts_();
-  if (!accounts.length) {
-    sh.getRange(1,1).setValue('⚠️ Не удалось получить список счетов.');
-    return;
-  }
-
-  // Собираем операции со всех счетов
-  let allOps = [];
-  accounts.forEach(function(acc) {
-    let ops = fetchOperations_(acc.id, acc.name, fromDate, now);
-    allOps = allOps.concat(ops);
-  });
-
-  // Сортируем от новых к старым
-  allOps.sort(function(a, b) { return b.date - a.date; });
 
   let COLS = 9;
-  let r    = 1;
+  let r = 1;
 
-  // ── Шапка ─────────────────────────────────────────────────────────
   mergedCell_(sh, r, 1, 1, COLS,
     '📋  ИСТОРИЯ ОПЕРАЦИЙ — последние ' + HISTORY_MONTHS + ' месяцев',
     { bg: C.DARK, fg: '#ffffff', bold: true, size: 14, align: 'center' });
@@ -110,14 +323,11 @@ function updateHistorySheet() {
     { bg: '#263238', fg: '#b0bec5', align: 'center' });
   r++;
 
-  // ── Мини-сводка ──────────────────────────────────────────────────
   let summary = buildSummary_(allOps);
   r = renderSummary_(sh, r, summary, COLS);
   r++;
 
-  // ── Таблица операций ─────────────────────────────────────────────
-  mergedCell_(sh, r, 1, 1, COLS, '▌ ВСЕ ОПЕРАЦИИ',
-    { bg: C.MID, fg: '#ffffff', bold: true });
+  mergedCell_(sh, r, 1, 1, COLS, '▌ ВСЕ ОПЕРАЦИИ', { bg: C.MID, fg: '#ffffff', bold: true });
   r++;
 
   let tableStartRow = r;
@@ -133,46 +343,37 @@ function updateHistorySheet() {
                     typeName === 'Пополнение' || typeName === 'Погашение облигации');
     let isCost   = (typeName === 'Комиссия' || typeName === 'Вывод');
 
-    // Надёжная запись даты: сначала формат @(текст), потом Utilities.formatDate
-    // Прямая запись Date-объекта или строки → Sheets конвертирует в серийный номер
     let dateCell = sh.getRange(r, 1);
     dateCell.setNumberFormat('@');
     dateCell.setValue(Utilities.formatDate(op.date, tz, 'dd.MM.yyyy HH:mm'));
     dateCell.setBackground(bg);
     sh.getRange(r, 2, 1, COLS - 1).setValues([[
-      op.accountName,
-      typeName,
-      op.instrumentName || '—',
-      op.quantity || '—',
-      op.price    || '',
-      op.amount,
-      op.commission || '',
-      op.note || ''
+      op.accountName, typeName, op.instrumentName || '—',
+      op.quantity || '—', op.price || '', op.amount, op.commission || '', op.note || ''
     ]]).setBackground(bg);
 
-    // Форматирование числовых колонок
     sh.getRange(r, 6).setNumberFormat('#,##0.00 [$₽-ru-RU]');
     sh.getRange(r, 7).setNumberFormat('#,##0.00 [$₽-ru-RU]');
     if (op.commission) sh.getRange(r, 8).setNumberFormat('#,##0.00 [$₽-ru-RU]');
 
-    // Цвет суммы: доход = зелёный, расход = красный
     let amountCell = sh.getRange(r, 7);
-    if (isIncome)     amountCell.setFontColor('#1b5e20').setFontWeight('bold');
-    else if (isCost)  amountCell.setFontColor('#b71c1c');
+    if (isIncome) amountCell.setFontColor('#1b5e20').setFontWeight('bold');
+    else if (isCost) amountCell.setFontColor('#b71c1c');
 
     r++;
   });
-
-  // Фильтр на таблицу
+ 
+ if (allOps.length > 0) {
+    sh.getRange(tableStartRow + 1, 9, allOps.length, 1).setWrap(true); // колонка «Примечание»
+  }
   try {
     let existingFilter = sh.getFilter();
     if (existingFilter) existingFilter.remove();
     sh.getRange(tableStartRow, 1, allOps.length + 1, COLS).createFilter();
-  } catch(e) {
+  } catch (e) {
     console.warn('История: не удалось создать фильтр: ' + e.message);
   }
 
-  // ── Ширина колонок ────────────────────────────────────────────────
   [90, 120, 100, 220, 70, 120, 130, 120, 150].forEach(function(w, i) {
     sh.setColumnWidth(i + 1, w);
   });
@@ -182,133 +383,14 @@ function updateHistorySheet() {
 
 
 // ════════════════════════════════════════════════════════════════════
-// ПОЛУЧЕНИЕ ОПЕРАЦИЙ ЧЕРЕЗ API (с пагинацией)
-// ════════════════════════════════════════════════════════════════════
-
-/**
- * Получает все операции по счёту за указанный период.
- * API возвращает данные страницами — обходим через cursor.
- */
-function fetchOperations_(accountId, accountName, fromDate, toDate) {
-  let ops    = [];
-  let cursor = '';
-  let maxPages = 20; // защита от бесконечного цикла
-
-  while (maxPages-- > 0) {
-    let body = {
-      accountId: accountId,
-      from:      fromDate.toISOString(),
-      to:        toDate.toISOString(),
-      limit:     1000,
-      operationTypes: OP_SHOW,
-    };
-    if (cursor) body.cursor = cursor;
-
-    let resp;
-    try {
-      resp = tiFetch_(
-        '/tinkoff.public.invest.api.contract.v1.OperationsService/GetOperationsByCursor',
-        body
-      );
-    } catch(e) {
-      console.warn('История: ошибка для счёта ' + accountId + ': ' + e.message);
-      break;
-    }
-
-    let items = resp.items || [];
-    items.forEach(function(item) {
-      let op = parseOperation_(item, accountId, accountName);
-      if (op) ops.push(op);
-    });
-
-    // Переходим на следующую страницу
-    if (resp.hasNext && resp.nextCursor) {
-      cursor = resp.nextCursor;
-    } else {
-      break;
-    }
-  }
-
-  return ops;
-}
-
-/**
- * Парсит одну операцию из API-ответа.
- */
-function parseOperation_(item, accountId, accountName) {
-  let type = item.type || item.operationType || '';
-  if (!type) return null;
-
-  // Парсим дату
-  let dateRaw = item.date;
-  let date;
-  if (typeof dateRaw === 'string') {
-    date = new Date(dateRaw);
-  } else if (dateRaw && dateRaw.seconds) {
-    date = new Date(Number(dateRaw.seconds) * 1000);
-  } else {
-    return null;
-  }
-  if (isNaN(date.getTime())) return null;
-
-  // Сумма операции
-  let amount = 0;
-  if (item.payment)    amount = moneyToNumber_(item.payment);
-  else if (item.price) amount = moneyToNumber_(item.price);
-
-  // Комиссия
-  let commission = null;
-  if (item.commission && moneyToNumber_(item.commission) !== 0) {
-    commission = Math.abs(moneyToNumber_(item.commission));
-  }
-
-  // Цена за единицу
-  let price = null;
-  if (item.price && item.quantity) {
-    price = moneyToNumber_(item.price);
-  }
-
-  // Количество бумаг
-  let quantity = null;
-  if (item.quantity && Number(item.quantity) > 0) {
-    quantity = Number(item.quantity);
-  }
-
-  // Название инструмента
-  let instrName = item.name || item.instrumentName || '';
-  if (!instrName && item.figi) instrName = item.figi;
-
-  return {
-    date:           date,
-    accountId:      accountId,
-    accountName:    accountName,
-    type:           type,
-    instrumentName: instrName,
-    quantity:       quantity,
-    price:          price ? Math.round(price * 100) / 100 : null,
-    amount:         Math.round(Math.abs(amount) * 100) / 100,
-    commission:     commission ? Math.round(commission * 100) / 100 : null,
-    note:           item.description || '',
-  };
-}
-
-
-// ════════════════════════════════════════════════════════════════════
-// МИНИ-СВОДКА
+// СВОДКА (без изменений)
 // ════════════════════════════════════════════════════════════════════
 
 function buildSummary_(ops) {
   let s = {
-    totalIn:       0,  // пополнения
-    totalOut:      0,  // выводы
-    totalCoupons:  0,  // купоны
-    totalDivs:     0,  // дивиденды
-    totalFees:     0,  // комиссии
-    totalBuys:     0,  // покупки (кол-во сделок)
-    totalSells:    0,  // продажи
-    totalRepay:    0,  // погашения облигаций
+    totalIn: 0, totalOut: 0, totalCoupons: 0, totalDivs: 0,
+    totalFees: 0, totalBuys: 0, totalSells: 0, totalRepay: 0,
   };
-
   ops.forEach(function(op) {
     let t = op.type;
     if (t === 'OPERATION_TYPE_INPUT')           s.totalIn      += op.amount;
@@ -316,19 +398,15 @@ function buildSummary_(ops) {
     if (t === 'OPERATION_TYPE_COUPON')          s.totalCoupons += op.amount;
     if (t === 'OPERATION_TYPE_DIVIDEND')        s.totalDivs    += op.amount;
     if (t === 'OPERATION_TYPE_BROKER_FEE')      s.totalFees    += op.amount;
-    if (t === 'OPERATION_TYPE_BUY' ||
-        t === 'OPERATION_TYPE_BUY_CARD')        s.totalBuys++;
-    if (t === 'OPERATION_TYPE_SELL' ||
-        t === 'OPERATION_TYPE_SELL_CARD')       s.totalSells++;
+    if (t === 'OPERATION_TYPE_BUY' || t === 'OPERATION_TYPE_BUY_CARD')   s.totalBuys++;
+    if (t === 'OPERATION_TYPE_SELL' || t === 'OPERATION_TYPE_SELL_CARD') s.totalSells++;
     if (t === 'OPERATION_TYPE_BOND_REPAYMENT')  s.totalRepay   += op.amount;
   });
-
   return s;
 }
 
 function renderSummary_(sh, r, s, COLS) {
-  mergedCell_(sh, r, 1, 1, COLS, '▌ СВОДКА ЗА ПЕРИОД',
-    { bg: C.MID, fg: '#ffffff', bold: true });
+  mergedCell_(sh, r, 1, 1, COLS, '▌ СВОДКА ЗА ПЕРИОД', { bg: C.MID, fg: '#ffffff', bold: true });
   r++;
 
   let summaryItems = [
@@ -342,47 +420,56 @@ function renderSummary_(sh, r, s, COLS) {
     ['💹 Продаж совершено',    s.totalSells + ' сделок',         '#e8f5e9'],
   ];
 
-  // Раскладываем по 2 в строку
   for (let i = 0; i < summaryItems.length; i += 2) {
     let left  = summaryItems[i];
     let right = summaryItems[i+1] || ['', '', C.EVEN];
     let half  = Math.floor(COLS / 2);
 
     sh.getRange(r, 1, 1, half).merge()
-      .setValue(left[0] + ':  ' + left[1])
-      .setBackground(left[2]).setFontWeight('bold');
+      .setValue(left[0] + ':  ' + left[1]).setBackground(left[2]).setFontWeight('bold');
     sh.getRange(r, half + 1, 1, COLS - half).merge()
-      .setValue(right[0] + (right[1] ? ':  ' + right[1] : ''))
-      .setBackground(right[2]).setFontWeight('bold');
+      .setValue(right[0] + (right[1] ? ':  ' + right[1] : '')).setBackground(right[2]).setFontWeight('bold');
     r++;
   }
 
-  // ── Блок реализованного пассивного дохода ─────────────────────────
   r++;
-  let passiveTotal = Math.round(s.totalCoupons + s.totalDivs + s.totalRepay); // используется в summary tiles
-  mergedCell_(sh, r, 1, 1, COLS,
-    '▌ РЕАЛИЗОВАННЫЙ ПАССИВНЫЙ ДОХОД ЗА ПЕРИОД',
-    { bg: '#2e7d32', fg: '#ffffff', bold: true });
+  mergedCell_(sh, r, 1, 1, COLS, '▌ РЕАЛИЗОВАННЫЙ ПАССИВНЫЙ ДОХОД ЗА ПЕРИОД', { bg: '#2e7d32', fg: '#ffffff', bold: true });
   r++;
 
-  let passiveIncome = Math.round(s.totalCoupons + s.totalDivs); // только доход, без возврата капитала
+  let passiveIncome = Math.round(s.totalCoupons + s.totalDivs);
   let passiveRows = [
-    ['🏦 Купоны по облигациям',  Math.round(s.totalCoupons), '#e8f5e9', false],
-    ['📈 Дивиденды по акциям',   Math.round(s.totalDivs),    '#e8f5e9', false],
-    ['📅 ИТОГО пассивный доход', passiveIncome,              '#a5d6a7', true],
-    ['🔄 Погашения облигаций',   Math.round(s.totalRepay),   '#e1f5fe', false],  // возврат номинала, не доход
+    ['🏦 Купоны по облигациям', Math.round(s.totalCoupons), '#e8f5e9', false],
+    ['📈 Дивиденды по акциям',  Math.round(s.totalDivs),    '#e8f5e9', false],
+    ['📅 ИТОГО пассивный доход', passiveIncome,             '#a5d6a7', true],
+    ['🔄 Погашения облигаций',  Math.round(s.totalRepay),   '#e1f5fe', false],
   ];
-
   passiveRows.forEach(function(item) {
     sh.getRange(r, 1, 1, COLS).merge()
       .setValue(item[0] + ':   ' + rub_(item[1]))
-      .setBackground(item[2])
-      .setFontWeight(item[3] ? 'bold' : 'normal')
-      .setFontSize(item[3] ? 12 : 10);
+      .setBackground(item[2]).setFontWeight(item[3] ? 'bold' : 'normal').setFontSize(item[3] ? 12 : 10);
     r++;
   });
 
   return r;
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// ПОЛУЧЕНИЕ ОПЕРАЦИЙ (для остальных модулей — без изменений, узкие окна)
+// ════════════════════════════════════════════════════════════════════
+
+function fetchOperations_(accountId, accountName, fromDate, toDate) {
+  let ops = [];
+  let cursor = '';
+  let maxPages = 20;
+
+  while (maxPages-- > 0) {
+    let page = fetchOperationsPage_(accountId, accountName, fromDate, toDate, cursor);
+    ops = ops.concat(page.ops);
+    if (page.hasNext && page.nextCursor) cursor = page.nextCursor;
+    else break;
+  }
+  return ops;
 }
 
 
@@ -392,17 +479,12 @@ function renderSummary_(sh, r, s, COLS) {
 
 function getAccounts_() {
   try {
-    let resp     = tiFetch_('/tinkoff.public.invest.api.contract.v1.UsersService/GetAccounts', {});
-    let accounts = (resp.accounts || []).filter(function(a) {
-      return a.status === 'ACCOUNT_STATUS_OPEN';
-    });
+    let resp = tiFetch_('/tinkoff.public.invest.api.contract.v1.UsersService/GetAccounts', {});
+    let accounts = (resp.accounts || []).filter(function(a) { return a.status === 'ACCOUNT_STATUS_OPEN'; });
     return accounts.map(function(a) {
-      return {
-        id:   a.id,
-        name: a.name || (a.type === 'ACCOUNT_TYPE_TINKOFF_IIS' ? 'ИИС' : 'Брокерский'),
-      };
+      return { id: a.id, name: a.name || (a.type === 'ACCOUNT_TYPE_TINKOFF_IIS' ? 'ИИС' : 'Брокерский') };
     });
-  } catch(e) {
+  } catch (e) {
     console.error('История: ошибка получения счетов: ' + e.message);
     return [];
   }

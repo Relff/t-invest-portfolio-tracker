@@ -1,12 +1,8 @@
 /**
  * income_v4.js — Лист «Ожидаемый доход»
  *
- * Главное изменение vs v3:
- *   - Акции и облигации читаются НАПРЯМУЮ из Дан_Акции / Дан_Облигации
- *     (больше не зависит от категорийной логики readPositions_)
- *   - Исправлен баг: акции больше не попадают в «Прочие»
- *   - Улучшена строка «Остальные облигации» — показывает сумму купонов
- *   - Добавлен блок «Выводы» внизу
+ * v5: дивиденды теперь считаются автоматически из истории выплат (GetDividends),
+ * если не заданы вручную в Config → Блок 4. Ручной ввод остаётся приоритетным.
  */
 
 const BOND_TOP_N = 15;
@@ -16,42 +12,42 @@ const BOND_TOP_N = 15;
 // ════════════════════════════════════════════════════════════════════
 
 function updateIncomeSheet() {
-  let ss = SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName(DST.INCOME);
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(DST.INCOME);
   if (!sh) sh = ss.insertSheet(DST.INCOME);
   sh.clearContents();
   sh.clearFormats();
 
-  let config;
+  var config;
   try { config = readConfig_(); }
   catch(e) { sh.getRange(1,1).setValue('⚠️ ' + e.message); return; }
 
-  let totalRub  = getTotalPortfolioValue_();
-  let tz        = Session.getScriptTimeZone();
-  let now       = Utilities.formatDate(new Date(), tz, 'dd.MM.yyyy HH:mm');
-  let divMap    = readDividendsFromConfig_();
-  let figiMap   = buildFigiMap_();
+  var totalRub  = getTotalPortfolioValue_();
+  var tz        = Session.getScriptTimeZone();
+  var now       = Utilities.formatDate(new Date(), tz, 'dd.MM.yyyy HH:mm');
+  var divMap    = readDividendsFromConfig_();
+  var figiMap   = buildFigiMap_();
 
   // Читаем акции и облигации напрямую
-  let sharePositions = readSheetPositions_('Дан_Акции');
-  let bondPositions  = readSheetPositions_('Дан_Облигации');
+  var sharePositions = readSheetPositions_('_Дан_Акции');
+  var bondPositions  = readSheetPositions_('_Дан_Облигации');
 
   // Считаем доход
-  let shareRows = calcShareIncome_(sharePositions, divMap, totalRub);
-  let bondRows  = calcBondIncome_(bondPositions, figiMap, totalRub);
+  var shareRows = calcShareIncome_(sharePositions, divMap, figiMap, totalRub);
+  var bondRows  = calcBondIncome_(bondPositions, figiMap, totalRub);
 
   // Сортировка
   shareRows.sort(function(a,b){ return a.name.localeCompare(b.name,'ru'); });
   bondRows.sort(function(a,b){ return b.incomeYear - a.incomeYear; });
 
   // Итоги
-  let shareTotal = shareRows.reduce(function(s,r){ return s + r.incomeYear; }, 0);
-  let bondTotal  = bondRows.reduce(function(s,r){ return s + r.incomeYear; }, 0);
-  let grandTotal = shareTotal + bondTotal;
-  let yieldPct   = totalRub > 0 ? (grandTotal / totalRub * 100) : 0;
+  var shareTotal = shareRows.reduce(function(s,r){ return s + r.incomeYear; }, 0);
+  var bondTotal  = bondRows.reduce(function(s,r){ return s + r.incomeYear; }, 0);
+  var grandTotal = shareTotal + bondTotal;
+  var yieldPct   = totalRub > 0 ? (grandTotal / totalRub * 100) : 0;
 
-  let COLS = 7;
-  let r    = 1;
+  var COLS = 7;
+  var r    = 1;
 
   // ── ШАПКА ─────────────────────────────────────────────────────────
   mergedCell_(sh, r, 1, 1, COLS,
@@ -65,15 +61,15 @@ function updateIncomeSheet() {
   r++;
 
   // ── 4 ПЛИТКИ ─────────────────────────────────────────────────────
-  let half = Math.floor(COLS / 2);
-  let tiles = [
+  var half = Math.floor(COLS / 2);
+  var tiles = [
     { label: '📅 Доход в год',   val: rub_(grandTotal), bg: '#1565c0' },
     { label: '📈 Доходность',    val: yieldPct.toFixed(1) + '%', bg: '#1565c0' },
     { label: '📊 Акции',        val: rub_(shareTotal), bg: C.MID },
     { label: '🏦 Облигации',    val: rub_(bondTotal),  bg: C.MID },
   ];
-  for (let ti = 0; ti < tiles.length; ti++) {
-    let col = (ti % 2 === 0) ? 1 : half + 1;
+  for (var ti = 0; ti < tiles.length; ti++) {
+    var col = (ti % 2 === 0) ? 1 : half + 1;
     if (ti % 2 === 0 && ti > 0) r++;
     sh.getRange(r, col, 1, half).merge()
       .setValue(tiles[ti].label + ':  ' + tiles[ti].val)
@@ -115,8 +111,8 @@ function updateIncomeSheet() {
     COLS);
   r++;
 
-  let topBonds  = bondRows.slice(0, BOND_TOP_N);
-  let restBonds = bondRows.slice(BOND_TOP_N);
+  var topBonds  = bondRows.slice(0, BOND_TOP_N);
+  var restBonds = bondRows.slice(BOND_TOP_N);
 
   topBonds.forEach(function(row, idx) {
     writeIncomeRow_(sh, r, row, idx, totalRub);
@@ -125,10 +121,10 @@ function updateIncomeSheet() {
 
   // Строка «Остальные» с суммой купонов
   if (restBonds.length > 0) {
-    let restIncome = restBonds.reduce(function(s,x){ return s + x.incomeYear; }, 0);
-    let restValue  = restBonds.reduce(function(s,x){ return s + x.valueRub;   }, 0);
-    let restPct    = totalRub > 0 ? restValue / totalRub : 0;
-    let restBg     = topBonds.length % 2 === 0 ? C.EVEN : C.ODD;
+    var restIncome = restBonds.reduce(function(s,x){ return s + x.incomeYear; }, 0);
+    var restValue  = restBonds.reduce(function(s,x){ return s + x.valueRub;   }, 0);
+    var restPct    = totalRub > 0 ? restValue / totalRub : 0;
+    var restBg     = topBonds.length % 2 === 0 ? C.EVEN : C.ODD;
 
     sh.getRange(r, 1, 1, COLS).setValues([[
       '…ещё ' + restBonds.length + ' облигаций',
@@ -152,22 +148,22 @@ function updateIncomeSheet() {
   r++;
 
   // Топ-3 облигации по доходу
-  let top3 = bondRows.slice(0, 3);
-  let top3txt = top3.map(function(b, i) {
+  var top3 = bondRows.slice(0, 3);
+  var top3txt = top3.map(function(b, i) {
     return (i+1) + '. ' + b.name + ' — ' + rub_(b.incomeYear);
   }).join('   |   ');
 
   writeConclusion_(sh, r, '🏆 Топ-3 облигации по доходу:', top3txt); r++;
 
   // Акции с дивидендами
-  let divStocks = shareRows.filter(function(x){ return x.incomeYear > 0; });
-  let divTxt = divStocks.length > 0
+  var divStocks = shareRows.filter(function(x){ return x.incomeYear > 0; });
+  var divTxt = divStocks.length > 0
     ? divStocks.map(function(s){ return s.name + ' (' + rub_(s.incomeYear) + ')'; }).join(', ')
     : 'Пока нет дивидендных акций';
   writeConclusion_(sh, r, '💰 Дивиденды по акциям:', divTxt); r++;
 
   // Структура дохода
-  let bondShare = grandTotal > 0 ? Math.round(bondTotal / grandTotal * 100) : 0;
+  var bondShare = grandTotal > 0 ? Math.round(bondTotal / grandTotal * 100) : 0;
   writeConclusion_(sh, r, '📊 Структура дохода:',
     'Облигации ' + bondShare + '%  ·  Акции ' + (100-bondShare) + '%'); r++;
 
@@ -177,7 +173,7 @@ function updateIncomeSheet() {
     rub_(shareTotal / 12) + ' от дивидендов)'); r++;
 
   // Краткий вывод
-  let conclusion = grandTotal === 0
+  var conclusion = grandTotal === 0
     ? 'Нет данных для расчёта.'
     : shareTotal === 0
     ? 'Весь доход сейчас от облигаций (купоны). После покупки дивидендных акций (Сбер, Лукойл) картина изменится.'
@@ -209,46 +205,43 @@ function updateIncomeSheet() {
 // ════════════════════════════════════════════════════════════════════
 
 function readSheetPositions_(sheetName) {
-  let ss   = SpreadsheetApp.getActive();
-  let sh   = ss.getSheetByName(sheetName);
+  var ss   = SpreadsheetApp.getActive();
+  var sh   = ss.getSheetByName(sheetName);
   if (!sh) return [];
 
-  let data = sh.getDataRange().getValues();
+  var data = sh.getDataRange().getValues();
   if (data.length < 2) return [];
 
-  let H = {};
+  var H = {};
   data[0].forEach(function(h,i){ H[String(h).trim()] = i; });
 
-  let result = [];
-  for (let i = 1; i < data.length; i++) {
-    let row      = data[i];
-    let name     = String(row[H['name']]   || '').trim();
-    let ticker   = String(row[H['ticker']] || '').trim();
-    let valueRub = Number(row[H['position_value_rub']]          || 0);
-    let price    = Number(row[H['current_price_rub_per_piece']] || 0);
-    let qty      = Number(row[H['quantity_pcs']]                || 0);
-    let lot      = Number(row[H['lot']]    || 1);
-    let figi     = String(row[H['figi']]   || '').trim();
+  var result = [];
+  for (var i = 1; i < data.length; i++) {
+    var row      = data[i];
+    var name     = String(row[H['name']]   || '').trim();
+    var ticker   = String(row[H['ticker']] || '').trim();
+    var valueRub = Number(row[H['position_value_rub']]          || 0);
+    var qty      = Number(row[H['quantity_pcs']]                || 0);
+    var figi     = String(row[H['figi']]   || '').trim();
 
     if (!name || valueRub === 0) continue;
-    result.push({ name:name, ticker:ticker, valueRub:valueRub,
-                  price:price, qty:qty, lot:lot, figi:figi });
+    result.push({ name: name, ticker: ticker, valueRub: valueRub, qty: qty, figi: figi });
   }
   return result;
 }
 
 function getTotalPortfolioValue_() {
-  let ss  = SpreadsheetApp.getActive();
-  let src = ['Дан_Акции','Дан_Облигации','Дан_Фонды','Дан_Деньги','Дан_Валюта'];
-  let total = 0;
+  var ss  = SpreadsheetApp.getActive();
+  var src = ['_Дан_Акции','_Дан_Облигации','_Дан_Фонды','_Дан_Деньги','_Дан_Валюта'];
+  var total = 0;
   src.forEach(function(name) {
-    let sh = ss.getSheetByName(name);
+    var sh = ss.getSheetByName(name);
     if (!sh) return;
-    let data = sh.getDataRange().getValues();
+    var data = sh.getDataRange().getValues();
     if (data.length < 2) return;
-    let H = {};
+    var H = {};
     data[0].forEach(function(h,i){ H[String(h).trim()] = i; });
-    for (let i = 1; i < data.length; i++) {
+    for (var i = 1; i < data.length; i++) {
       total += Number(data[i][H['position_value_rub']] || 0);
     }
   });
@@ -257,14 +250,25 @@ function getTotalPortfolioValue_() {
 
 
 // ════════════════════════════════════════════════════════════════════
-// РАСЧЁТ ДОХОДА
+// РАСЧЁТ ДОХОДА ПО АКЦИЯМ И ОБЛИГАЦИЯМ
 // ════════════════════════════════════════════════════════════════════
 
-function calcShareIncome_(positions, divMap, totalRub) {
+function calcShareIncome_(positions, divMap, figiMap, totalRub) {
   return positions.map(function(p) {
-    let div           = findDividend_(p.name, p.ticker, divMap);
-    let incomePerUnit = div.amount;
-    let incomeYear    = incomePerUnit * p.qty;
+    var div = findDividend_(p.name, p.ticker, divMap);
+
+    // Если в Config ничего не задано (0 или отсутствует) — считаем сами из истории API
+    if (div.amount <= 0) {
+      var figi = p.figi || (figiMap && (figiMap[p.name] || figiMap[p.ticker])) || '';
+      if (figi) {
+        var hist = fetchAnnualDividendFromHistory_(figi);
+        Utilities.sleep(50);
+        if (hist.perUnit > 0) div = { amount: hist.perUnit, note: hist.note };
+      }
+    }
+
+    var incomePerUnit = div.amount;
+    var incomeYear    = incomePerUnit * p.qty;
     return {
       name:          p.name,
       ticker:        p.ticker,
@@ -279,8 +283,8 @@ function calcShareIncome_(positions, divMap, totalRub) {
 
 function calcBondIncome_(positions, figiMap, totalRub) {
   return positions.map(function(p) {
-    let figi = p.figi || figiMap[p.name] || figiMap[p.ticker] || '';
-    let coupon = { perUnit: 0, note: 'FIGI не найден' };
+    var figi = p.figi || figiMap[p.name] || figiMap[p.ticker] || '';
+    var coupon = { perUnit: 0, note: 'FIGI не найден' };
     if (figi) {
       coupon = fetchAnnualCoupon_(figi);
       Utilities.sleep(50);
@@ -305,14 +309,14 @@ function calcBondIncome_(positions, figiMap, totalRub) {
 function fetchAnnualCoupon_(figi) {
   if (!figi) return { perUnit: 0, note: 'Нет FIGI' };
   try {
-    let now  = new Date();
-    let in1y = new Date(now.getTime() + 365*24*3600*1000);
-    let resp = tiFetch_(
+    var now  = new Date();
+    var in1y = new Date(now.getTime() + 365*24*3600*1000);
+    var resp = tiFetch_(
       '/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetBondCoupons',
       { figi: figi, from: now.toISOString(), to: in1y.toISOString() }
     );
-    let coupons = resp.events || [];
-    let total   = 0;
+    var coupons = resp.events || [];
+    var total   = 0;
     coupons.forEach(function(c){
       total += moneyToNumber_(c.payOneBond || c.couponAmount || null);
     });
@@ -327,24 +331,54 @@ function fetchAnnualCoupon_(figi) {
 
 
 // ════════════════════════════════════════════════════════════════════
-// ДИВИДЕНДЫ ИЗ CONFIG
+// ДИВИДЕНДЫ ИЗ ИСТОРИИ ВЫПЛАТ (T-INVEST API) — автооценка
+// ════════════════════════════════════════════════════════════════════
+
+function fetchAnnualDividendFromHistory_(figi) {
+  if (!figi) return { perUnit: 0, note: 'Нет FIGI' };
+  try {
+    var now   = new Date();
+    var ago12 = new Date(now.getTime() - 365 * 24 * 3600 * 1000);
+    var resp = tiFetch_(
+      '/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetDividends',
+      { figi: figi, from: ago12.toISOString(), to: now.toISOString() }
+    );
+    var events = resp.dividends || [];
+    var total  = 0;
+    events.forEach(function(d){
+      total += moneyToNumber_(d.dividendNet || d.dividendValue || null);
+    });
+    return {
+      perUnit: total,
+      note: events.length > 0
+        ? 'оценка (история, ' + events.length + ' выпл.)'
+        : 'Нет данных за 12 мес.'
+    };
+  } catch(e) {
+    return { perUnit: 0, note: 'Ошибка: ' + e.message.substring(0,35) };
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════════
+// ДИВИДЕНДЫ ИЗ CONFIG (ручной приоритет)
 // ════════════════════════════════════════════════════════════════════
 
 function readDividendsFromConfig_() {
-  let ss = SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName(DST.CONFIG);
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(DST.CONFIG);
   if (!sh) return {};
-  let v   = sh.getDataRange().getValues();
-  let map = {};
-  let startRow = -1;
-  for (let i = 0; i < v.length; i++) {
+  var v   = sh.getDataRange().getValues();
+  var map = {};
+  var startRow = -1;
+  for (var i = 0; i < v.length; i++) {
     if (String(v[i][0]).includes('ДИВИДЕНДЫ')) { startRow = i + 2; break; }
   }
   if (startRow < 0) return {};
-  for (let j = startRow; j < v.length; j++) {
-    let name   = String(v[j][0]).trim();
-    let amount = Number(v[j][1]) || 0;
-    let ticker = String(v[j][2]).trim();
+  for (var j = startRow; j < v.length; j++) {
+    var name   = String(v[j][0]).trim();
+    var amount = Number(v[j][1]) || 0;
+    var ticker = String(v[j][2]).trim();
     if (!name) break;
     if (name)   map[name]   = { amount: amount, note: 'из Config' };
     if (ticker) map[ticker] = { amount: amount, note: 'из Config' };
@@ -355,13 +389,13 @@ function readDividendsFromConfig_() {
 function findDividend_(name, ticker, divMap) {
   if (divMap[name])   return divMap[name];
   if (divMap[ticker]) return divMap[ticker];
-  let nl = name.toLowerCase();
-  let keys = Object.keys(divMap);
-  for (let i = 0; i < keys.length; i++) {
-    let k = keys[i].toLowerCase();
+  var nl = name.toLowerCase();
+  var keys = Object.keys(divMap);
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i].toLowerCase();
     if (nl.includes(k) || k.includes(nl)) return divMap[keys[i]];
   }
-  return { amount: 0, note: '⚠️ Укажите в Config → Блок 4' };
+  return { amount: 0, note: '⚠️ Нет данных' };
 }
 
 
@@ -370,18 +404,18 @@ function findDividend_(name, ticker, divMap) {
 // ════════════════════════════════════════════════════════════════════
 
 function buildFigiMap_() {
-  let ss = SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName(DST.POSITIONS);
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(DST.POSITIONS);
   if (!sh) return {};
-  let data = sh.getDataRange().getValues();
+  var data = sh.getDataRange().getValues();
   if (data.length < 2) return {};
-  let H = {};
+  var H = {};
   data[0].forEach(function(h,i){ H[String(h).trim()] = i; });
-  let map = {};
-  for (let i = 1; i < data.length; i++) {
-    let name   = String(data[i][H['name']]   || '').trim();
-    let ticker = String(data[i][H['ticker']] || '').trim();
-    let figi   = String(data[i][H['figi']]   || '').trim();
+  var map = {};
+  for (var i = 1; i < data.length; i++) {
+    var name   = String(data[i][H['name']]   || '').trim();
+    var ticker = String(data[i][H['ticker']] || '').trim();
+    var figi   = String(data[i][H['figi']]   || '').trim();
     if (figi && name)   map[name]   = figi;
     if (figi && ticker) map[ticker] = figi;
   }
@@ -390,35 +424,26 @@ function buildFigiMap_() {
 
 
 // ════════════════════════════════════════════════════════════════════
-// БЛОК 4 В CONFIG
+// БЛОК 4 В CONFIG (теперь опциональный override, не обязательный)
 // ════════════════════════════════════════════════════════════════════
 
 function addDividendsBlock() {
-  let ss = SpreadsheetApp.getActive();
-  let sh = ss.getSheetByName(DST.CONFIG);
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(DST.CONFIG);
   if (!sh) { SpreadsheetApp.getUi().alert('⚠️ Сначала запустите initConfig()'); return; }
 
-  let vals = sh.getDataRange().getValues();
-  for (let i = 0; i < vals.length; i++) {
+  var vals = sh.getDataRange().getValues();
+  for (var i = 0; i < vals.length; i++) {
     if (String(vals[i][0]).includes('ДИВИДЕНДЫ')) {
       SpreadsheetApp.getUi().alert('Блок 4 уже существует в Config.');
       return;
     }
   }
 
-  let lastRow = sh.getLastRow() + 2;
-  let block = [
-    ['▌ ДИВИДЕНДЫ АКЦИЙ — заполните вручную (₽ в год на 1 акцию)', '', ''],
+  var lastRow = sh.getLastRow() + 2;
+  var block = [
+    ['▌ ДИВИДЕНДЫ АКЦИЙ — заполняйте только если хотите переопределить автооценку', '', ''],
     ['Название (точно как в портфеле)', 'Дивиденд ₽/год', 'Тикер'],
-    ['Сбербанк',                 34,    'SBER'],
-    ['Лукойл',                   1000,  'LKOH'],
-    ['Т-Технологии',             0,     'T'],
-    ['ЯНДЕКС ао01',              0,     'YDEX'],
-    ['Корпоративный Центр Икс 5',0,     'X5'],
-    ['ФосАгро',                  900,   'PHOR'],
-    ['Positive Technologies',    0,     'POSI'],
-    ['Озон',                     0,     'OZON'],
-    ['Полюс',                    700,   'PLZL'],
   ];
 
   sh.getRange(lastRow, 1, block.length, 3).setValues(block);
@@ -429,8 +454,8 @@ function addDividendsBlock() {
 
   SpreadsheetApp.getUi().alert(
     '✅ Блок 4 добавлен!\n\n' +
-    'Проверьте суммы дивидендов — они примерные.\n' +
-    'Т-Техно, Яндекс, X5, Ozon, Positive → дивидендов нет, оставьте 0.'
+    'Теперь можно оставить пустым — дивиденды считаются автоматически из истории.\n' +
+    'Заполняй строку вручную только если хочешь переопределить автооценку конкретной бумаги.'
   );
 }
 
@@ -440,8 +465,8 @@ function addDividendsBlock() {
 // ════════════════════════════════════════════════════════════════════
 
 function writeIncomeRow_(sh, row, data, idx, totalRub) {
-  let bg     = idx % 2 === 0 ? C.EVEN : C.ODD;
-  let pctPf  = (totalRub > 0 && data.valueRub > 0) ? data.valueRub / totalRub : 0;
+  var bg     = idx % 2 === 0 ? C.EVEN : C.ODD;
+  var pctPf  = (totalRub > 0 && data.valueRub > 0) ? data.valueRub / totalRub : 0;
   sh.getRange(row, 1, 1, 7).setValues([[
     data.name, data.ticker, data.qty,
     data.incomePerUnit, data.incomeYear,
@@ -452,13 +477,24 @@ function writeIncomeRow_(sh, row, data, idx, totalRub) {
   sh.getRange(row, 4).setNumberFormat('#,##0.00 [$₽-ru-RU]');
   sh.getRange(row, 6).setNumberFormat('0.0%');
 
-  let incCell = sh.getRange(row, 5);
+  var incCell = sh.getRange(row, 5);
   incCell.setNumberFormat('#,##0 [$₽-ru-RU]');
-  let inc = data.incomeYear;
+  var inc = data.incomeYear;
   if      (inc <= 0)    incCell.setBackground('#ffcdd2').setFontColor('#b71c1c');
   else if (inc < 1000)  incCell.setBackground('#fff9c4').setFontColor('#f57f17');
   else if (inc < 5000)  incCell.setBackground('#c8e6c9').setFontColor('#1b5e20');
   else                  incCell.setBackground('#2e7d32').setFontColor('#ffffff');
+
+  // Подсветка источника цифры: зелёный — подтверждено вручную, жёлтый — оценка по истории
+  var noteCell = sh.getRange(row, 7);
+  var noteStr  = String(data.note || '');
+  if (noteStr.indexOf('оценка') === 0) {
+    noteCell.setBackground('#fff9c4').setFontColor('#f57f17').setFontStyle('italic');
+  } else if (noteStr.indexOf('из Config') > -1) {
+    noteCell.setBackground('#c8e6c9').setFontColor('#1b5e20');
+  } else if (noteStr.indexOf('⚠️') > -1) {
+    noteCell.setBackground('#ffcdd2').setFontColor('#b71c1c');
+  }
 }
 
 function writeTotalRow_(sh, row, label, amount, COLS, color) {
@@ -473,5 +509,6 @@ function writeConclusion_(sh, row, label, text) {
     .setValue(label).setBackground('#eceff1')
     .setFontWeight('bold').setFontColor('#37474f');
   sh.getRange(row, 3, 1, 5).merge()
-    .setValue(text).setBackground('#eceff1').setFontColor('#546e7a');
+    .setValue(text).setBackground('#eceff1').setFontColor('#546e7a')
+    .setWrap(true);
 }
