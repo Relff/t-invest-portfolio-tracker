@@ -133,6 +133,13 @@ function generateAnnualReport() {
   let allocTable = body.appendTable(allocRows);
   allocTable.getRow(0).editAsText().setBold(true);
 
+  // ── Футер ────────────────────────────────────────────────────
+  body.appendParagraph('');
+  let footer = body.appendParagraph(
+    'Сформировано с помощью t-invest-portfolio-tracker — github.com/Relff/t-invest-portfolio-tracker');
+  footer.setForegroundColor('#999999');
+  footer.editAsText().setFontSize(0, footer.getText().length - 1, 9);
+
   doc.saveAndClose();
 
   let url = doc.getUrl();

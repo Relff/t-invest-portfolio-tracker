@@ -91,6 +91,8 @@ const HTML_DASHBOARD_TEMPLATE_ = `
     .rangeBtn { border: 1px solid #dadce0; background: #fff; border-radius: 8px; padding: 3px 10px; font-size: 11px; cursor: pointer; color: #444; }
     .rangeBtn:hover { background: #f1f3f4; }
     .rangeBtn.active { background: #1565c0; color: #fff; border-color: #1565c0; }
+    .watermark { text-align: center; font-size: 10px; color: #9aa0a6; margin-top: 14px; }
+    .watermark a { color: #9aa0a6; }
   </style>
 </head>
 <body>
@@ -130,7 +132,8 @@ const HTML_DASHBOARD_TEMPLATE_ = `
 
       root.innerHTML = cardsHtml +
         '<div class="chart-box pie-box"><h3>Распределение по классам</h3><canvas id="pieChart"></canvas></div>' +
-        '<div class="chart-box"><h3>Рост портфеля во времени' + rangeButtonsHtml + '</h3><canvas id="growthChart"></canvas></div>';
+        '<div class="chart-box"><h3>Рост портфеля во времени' + rangeButtonsHtml + '</h3><canvas id="growthChart"></canvas></div>' +
+        '<div class="watermark">t-invest-portfolio-tracker · <a href="https://github.com/Relff/t-invest-portfolio-tracker" target="_blank">github.com/Relff/t-invest-portfolio-tracker</a></div>';
 
       if (data.allocation.length) {
         new Chart(document.getElementById('pieChart'), {
