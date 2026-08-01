@@ -30,20 +30,7 @@ function calculateAveragePriceAndPL_impl_() {
   let results = shares.map(function(p) {
     let myOps = allOps.filter(function(op) { return matchesName_(op.instrumentName, p.name); })
                        .sort(function(a, b) { return a.date - b.date; });
-    let lots = [];
-    myOps.forEach(function(op) {
-      if (op.type.indexOf('BUY') >= 0) {
-        lots.push({ qty: op.quantity, price: op.price });
-      } else {
-        let toSell = op.quantity;
-        while (toSell > 0 && lots.length) {
-          let lot = lots[0];
-          let used = Math.min(lot.qty, toSell);
-          lot.qty -= used; toSell -= used;
-          if (lot.qty <= 0) lots.shift();
-        }
-      }
-    });
+    let lots = buildFifoLots_(myOps);
 
     let fifoQty   = lots.reduce(function(s, l) { return s + l.qty; }, 0);
     let costBasis = lots.reduce(function(s, l) { return s + l.qty * l.price; }, 0);
@@ -60,6 +47,29 @@ function calculateAveragePriceAndPL_impl_() {
 
   PropertiesService.getScriptProperties().setProperty(AVGPRICE_PROP, JSON.stringify(results));
   redrawAvgPriceSection_();
+}
+
+/**
+ * Строит список открытых FIFO-лотов (с датой покупки каждого) по истории
+ * сделок одной бумаги. Общая логика для avgprice.js и ldv.js — держите
+ * их в синхронизации, если меняете расчёт FIFO.
+ */
+function buildFifoLots_(myOps) {
+  let lots = [];
+  myOps.forEach(function(op) {
+    if (op.type.indexOf('BUY') >= 0) {
+      lots.push({ qty: op.quantity, price: op.price, date: op.date });
+    } else {
+      let toSell = op.quantity;
+      while (toSell > 0 && lots.length) {
+        let lot = lots[0];
+        let used = Math.min(lot.qty, toSell);
+        lot.qty -= used; toSell -= used;
+        if (lot.qty <= 0) lots.shift();
+      }
+    }
+  });
+  return lots;
 }
 
 function matchesName_(opName, posName) {

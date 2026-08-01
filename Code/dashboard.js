@@ -80,6 +80,7 @@ function onOpen() {
         .addItem('Yield on Cost', 'calculateYieldOnCost')
         .addItem('Health check концентрации', 'calculateConcentrationHealth')
         .addItem('ИИС-3 — вычет за год', 'calculateIisDeductionUsage')
+        .addItem('Льгота на долгосрочное владение (ЛДВ)', 'calculateLdvEligibility')
         .addItem('Дисциплина пополнений', 'calculateContributionDiscipline'))
       .addSubMenu(ui.createMenu('📄 Отчёты')
         .addItem('Сформировать годовой отчёт', 'generateAnnualReport')
@@ -90,7 +91,8 @@ function onOpen() {
         .addItem('Добавить блок дивидендов', 'addDividendsBlock')
         .addItem('Добавить блок продвинутых параметров', 'addAdvancedParamsBlock')
         .addItem('Добавить блок ИИС-3', 'addIisBlock')
-        .addItem('Добавить блок цели портфеля', 'addGoalBlock'));
+        .addItem('Добавить блок цели портфеля', 'addGoalBlock')
+        .addItem('Проверить подключение Telegram', 'testTelegramConnection'));
         
 
   menu.addToUi();
@@ -394,6 +396,8 @@ function syncAndRefresh() {
   updateIncomeSheet();
   updateCalendarSheet();
   hideDataSheets(false);
+  checkAndNotifyDeviations_();
+  notifySyncComplete_();
 }
 
 
