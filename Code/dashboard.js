@@ -70,6 +70,7 @@ function onOpen() {
         .addItem('Обновить Dashboard', 'updateDashboard')
         .addItem('Рассчитать доходность (XIRR + IMOEX)', 'calculateAnalytics')
         .addItem('Пересчитать калькулятор пополнения', 'calculateRebalance')
+        .addItem('История ребалансировок: сравнить с фактом', 'compareRebalanceExecution')
         .addItem('Прогресс к цели', 'calculateGoalProgress'))
       .addSubMenu(ui.createMenu('💰 Доход и история')
         .addItem('Обновить Ожидаемый доход', 'updateIncomeSheet')
@@ -81,6 +82,8 @@ function onOpen() {
         .addItem('Health check концентрации', 'calculateConcentrationHealth')
         .addItem('ИИС-3 — вычет за год', 'calculateIisDeductionUsage')
         .addItem('Льгота на долгосрочное владение (ЛДВ)', 'calculateLdvEligibility')
+        .addItem('Доп. бенчмарки (RGBI, золото)', 'calculateExtraBenchmarks')
+        .addItem('Корреляция между акциями', 'calculateStockCorrelation')
         .addItem('Дисциплина пополнений', 'calculateContributionDiscipline'))
       .addSubMenu(ui.createMenu('📄 Отчёты')
         .addItem('Сформировать годовой отчёт', 'generateAnnualReport')
@@ -542,6 +545,8 @@ function calculateRebalance() {
   let sh = ss.getSheetByName(DST.REBALANCE);
   if (!sh) sh = ss.insertSheet(DST.REBALANCE);
 
+  let batchDate = new Date(); // метка этой конкретной пачки рекомендаций — для истории ребалансировок
+
   let amount  = 0;
   let skipped = [];
   try {
@@ -668,6 +673,8 @@ function calculateRebalance() {
     return stockNeed[b].need - stockNeed[a].need;
   });
 
+  let rebalanceLogItems = [];
+
   stockOrder.forEach(function(name, idx) {
     let info   = stockNeed[name];
     let isSkip = skipped.indexOf(name) !== -1;
@@ -676,6 +683,8 @@ function calculateRebalance() {
     let actPct = totalRub > 0 ? info.actual / totalRub : 0;
     let lots   = isSkip ? 0 : res.lots;
     let alloc  = isSkip ? 0 : res.actualAlloc;
+
+    if (!isSkip && alloc > 0) rebalanceLogItems.push({ name: name, amount: alloc });
 
     let bg = idx % 2 === 0 ? C.EVEN : C.ODD;
     sh.getRange(r, 1, 1, 5)
@@ -700,6 +709,8 @@ function calculateRebalance() {
     if (isSkip) sh.getRange(r, 1, 1, 7).setFontColor(C.SKIP);
     r++;
   });
+
+  logRebalanceRecommendation_(batchDate, rebalanceLogItems);
 
   let otherCats   = ['Золото', 'Замещайки', 'Денежный рынок'];
   let otherBudget = otherCats.reduce(function(s,c){ return s + (classAlloc[c]||0); }, 0);

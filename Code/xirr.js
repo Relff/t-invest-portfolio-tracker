@@ -9,7 +9,14 @@
 const XIRR_HELPER_SHEET = '_XIRR_calc';
 const XIRR_YEARS_BACK   = 5;
 
-function calculateXIRR() {
+/**
+ * Чистый расчёт XIRR без побочных эффектов (UI/Properties) — переиспользуется
+ * как в calculateXIRR() (аналитика на Дашборде), так и в snapshot.js
+ * (накопление истории XIRR по датам).
+ *
+ * Возвращает % годовых (число) или null, если данных недостаточно.
+ */
+function computeXirrValue_() {
   let ss = SpreadsheetApp.getActive();
 
   let fromDate = new Date(new Date().getTime() - XIRR_YEARS_BACK * 365 * 24 * 3600 * 1000);
@@ -25,10 +32,7 @@ function calculateXIRR() {
     });
   });
 
-  if (flows.length < 1) {
-    SpreadsheetApp.getUi().alert('Недостаточно данных: нет ни одного пополнения за последние ' + XIRR_YEARS_BACK + ' лет.');
-    return;
-  }
+  if (flows.length < 1) return null;
 
   let config    = readConfig_();
   let positions = readPositions_(config);
@@ -52,10 +56,18 @@ function calculateXIRR() {
   let xirrValue = formulaCell.getValue();
   sh.hideSheet();
 
-  writeXirrToDashboard_(xirrValue);
+  return typeof xirrValue === 'number' ? xirrValue * 100 : null;
+}
+
+function calculateXIRR() {
+  let pct = computeXirrValue_();
+  if (pct === null) {
+    SpreadsheetApp.getUi().alert('Недостаточно данных: нет ни одного пополнения за последние ' + XIRR_YEARS_BACK + ' лет, либо XIRR не удалось посчитать.');
+  }
+  writeXirrToDashboard_(pct);
 }
 
 function writeXirrToDashboard_(xirrValue) {
-  let pct = typeof xirrValue === 'number' ? xirrValue * 100 : null;
+  let pct = typeof xirrValue === 'number' ? xirrValue : null;
   PropertiesService.getScriptProperties().setProperty(ANALYTICS_XIRR_PROP, JSON.stringify({ value: pct }));
 }

@@ -191,6 +191,14 @@ function updateIncomeSheet() {
     .setBackground(C.DARK).setFontColor('#ffd54f')
     .setFontWeight('bold').setFontSize(12).setHorizontalAlignment('center');
 
+  // Сохраняем итоги — переиспользуются в прогнозе денежного потока
+  // на HTML-дашборде (htmldashboard.js), без повторных запросов к API.
+  PropertiesService.getScriptProperties().setProperty('INCOME_TOTALS_DATA', JSON.stringify({
+    shareTotal: Math.round(shareTotal),
+    bondTotal:  Math.round(bondTotal),
+    grandTotal: Math.round(grandTotal),
+  }));
+
   // ── Ширина колонок ────────────────────────────────────────────────
   [255, 65, 75, 135, 155, 80, 200].forEach(function(w,i){
     sh.setColumnWidth(i+1, w);

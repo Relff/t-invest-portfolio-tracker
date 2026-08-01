@@ -2,14 +2,15 @@
  * snapshot.js — Ежедневный снимок баланса портфеля (с разбивкой по категориям)
  *
  * Пишет одну строку в день на скрытый лист "История баланса":
- * Дата | Общая стоимость | Пополнено с начала | Доход с начала | Акции | Облигации | Золото | Денежный рынок
+ * Дата | Общая стоимость | Пополнено с начала | Доход с начала | Акции | Облигации | Золото | Денежный рынок | XIRR, %
  *
  * Совместимость: старые строки (записанные до этого расширения) имеют
- * только первые 4 колонки — новые колонки там останутся пустыми,
+ * только первые 4 (или 8) колонки — новые колонки там останутся пустыми,
  * это ожидаемо и не является ошибкой.
  *
  * Зависимости: readConfig_(), readPositions_() — dashboard.js
  *              getAccounts_(), fetchOperations_() — history.js
+ *              computeXirrValue_() — xirr.js
  */
 
 const SNAPSHOT_SHEET = 'История баланса';
@@ -22,7 +23,7 @@ function recordDailySnapshot() {
     sh = ss.insertSheet(SNAPSHOT_SHEET);
     sh.appendRow([
       'Дата', 'Общая стоимость, ₽', 'Пополнено с начала, ₽', 'Доход с начала, ₽',
-      'Акции, ₽', 'Облигации, ₽', 'Золото, ₽', 'Денежный рынок, ₽'
+      'Акции, ₽', 'Облигации, ₽', 'Золото, ₽', 'Денежный рынок, ₽', 'XIRR, %'
     ]);
     sh.setFrozenRows(1);
     sh.hideSheet();
@@ -33,6 +34,9 @@ function recordDailySnapshot() {
       sh.getRange(1, 5, 1, 4).setValues([[
         'Акции, ₽', 'Облигации, ₽', 'Золото, ₽', 'Денежный рынок, ₽'
       ]]);
+    }
+    if (header.length < 9) {
+      sh.getRange(1, 9, 1, 1).setValue('XIRR, %');
     }
   }
 
@@ -84,11 +88,14 @@ function recordDailySnapshot() {
     });
   });
 
+  let xirrPct = computeXirrValue_();
+
   sh.appendRow([
     today,
     Math.round(totalRub),
     Math.round(prevContrib + deltaContrib),
     Math.round(prevIncome + deltaIncome),
     catSums[0], catSums[1], catSums[2], catSums[3],
+    xirrPct !== null ? Math.round(xirrPct * 10) / 10 : '',
   ]);
 }

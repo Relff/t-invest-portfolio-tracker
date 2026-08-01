@@ -10,6 +10,8 @@
  *              ANALYTICS_XIRR_PROP, ANALYTICS_BENCH_PROP — benchmark.js
  *              DISCIPLINE_PROP — discipline.js
  *              HEALTH_PROP — health.js
+ *              IIS_PROP, IIS_DEDUCTION_LIMIT — iis.js
+ *              LDV_PROP — ldv.js
  */
 
 function generateAnnualReport() {
@@ -116,6 +118,38 @@ function generateAnnualReport() {
       body.appendParagraph('Крупнейшая позиция: ' + h.overall.top1Name +
         ' — ' + (h.overall.top1Pct * 100).toFixed(1) + '% от портфеля');
       body.appendParagraph('Топ-3 позиции: ' + (h.overall.top3Pct * 100).toFixed(1) + '% от портфеля');
+    }
+  }
+
+  // ── ИИС-3 — вычет за год ─────────────────────────────────────
+  let iisRaw = props.getProperty(IIS_PROP);
+  if (iisRaw) {
+    let iis = JSON.parse(iisRaw);
+    body.appendParagraph('ИИС-3 — вычет за год').setHeading(DocumentApp.ParagraphHeading.HEADING1);
+    body.appendParagraph('Счёт: ' + iis.accountName + ' (' + iis.year + ' год)');
+    body.appendParagraph('Использовано вычета: ' + (iis.pct * 100).toFixed(1) + '% — ' +
+      rub_(iis.contributed) + ' из ' + rub_(IIS_DEDUCTION_LIMIT));
+    body.appendParagraph(iis.remaining > 0
+      ? 'Осталось довнести до конца года для максимального вычета: ' + rub_(iis.remaining)
+      : '✅ Лимит вычета за этот год полностью выбран');
+  }
+
+  // ── ЛДВ — льгота на долгосрочное владение ────────────────────
+  let ldvRaw = props.getProperty(LDV_PROP);
+  if (ldvRaw) {
+    let ldvResults = JSON.parse(ldvRaw);
+    if (ldvResults.length) {
+      body.appendParagraph('Льгота на долгосрочное владение (ЛДВ)').setHeading(DocumentApp.ParagraphHeading.HEADING1);
+      let tz = Session.getScriptTimeZone();
+      let ldvRows = [['Акция', 'Есть льгота, шт.', 'Пока нет льготы, шт.', 'Ближайший льготный транш']];
+      ldvResults.forEach(function(r) {
+        let dateStr = r.notYetQty > 0 && r.nextEligibleDate
+          ? Utilities.formatDate(new Date(r.nextEligibleDate), tz, 'dd.MM.yyyy')
+          : '—';
+        ldvRows.push([r.name, String(r.eligibleQty), String(r.notYetQty), dateStr]);
+      });
+      let ldvTable = body.appendTable(ldvRows);
+      ldvTable.getRow(0).editAsText().setBold(true);
     }
   }
 
