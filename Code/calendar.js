@@ -71,7 +71,8 @@ function updateCalendarSheet() {
     ['Месяц', 'Купоны, ₽', 'Дивиденды, ₽', 'Итого, ₽', 'Прогресс', '', ''],
     COLS);
   r++;
-let monthlyDataStartRow = r; // запоминаем начало данных для графика
+let monthlyDataStartRow = r; // запоминаем начало данных таблицы (используется ниже для чтения при желании)
+  var monthlyChartData = []; // для HTML-дашборда — график теперь там, не на листе
 
   // Находим максимум для прогресс-баров
   var maxMonthly = 0;
@@ -100,6 +101,12 @@ let monthlyDataStartRow = r; // запоминаем начало данных �
     yearCoupons   += couponAmt;
     yearDividends += divAmt;
 
+    monthlyChartData.push({
+      label: MONTH_NAMES[monthIdx - 1].substring(0, 3) + ' ' + dispYear,
+      coupons: Math.round(couponAmt),
+      dividends: Math.round(divAmt),
+    });
+
     // Прогресс-бар
     var barLen  = maxMonthly > 0 ? Math.round((total / maxMonthly) * 20) : 0;
     var barStr  = '█'.repeat(barLen) + '░'.repeat(20 - barLen);
@@ -122,7 +129,11 @@ let monthlyDataStartRow = r; // запоминаем начало данных �
     r++;
   }
 
-buildIncomeChart_(sh, monthlyDataStartRow); 
+// График «Пассивный доход по месяцам» переехал в HTML-дашборд (htmldashboard.js),
+  // чтобы не дублировать графики между листом и модальным окном — здесь только
+  // сохраняем данные для него, никакого объекта-графика на самом листе больше нет.
+  PropertiesService.getScriptProperties().setProperty(
+    'CALENDAR_MONTHLY_INCOME_DATA', JSON.stringify(monthlyChartData));
 
   // Итоговая строка
   var yearTotal = yearCoupons + yearDividends;
@@ -373,33 +384,6 @@ function buildMonthlyGrid_(payments, fromDate) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// ГРАФИК ДОХОДА ПО МЕСЯЦАМ
+// (график дохода по месяцам теперь строится в htmldashboard.js —
+//  данные для него готовятся выше и сохраняются в Script Properties)
 // ════════════════════════════════════════════════════════════════════
-
-function buildIncomeChart_(sh, dataStartRow) {
-  sh.getCharts().forEach(function(c) { sh.removeChart(c); });
-
-  let range = sh.getRange(dataStartRow - 1, 1, 13, 3);
-
-  let chart = sh.newChart()
-    .setChartType(Charts.ChartType.COLUMN)
-    .addRange(range)
-    .setOption('isStacked', true)
-    .setOption('title', 'Пассивный доход по месяцам')
-    .setOption('titleTextStyle', { fontSize: 13, bold: true, color: '#1a237e' })
-    .setOption('legend', { position: 'top', textStyle: { fontSize: 12 } })
-    .setOption('series', {
-      0: { labelInLegend: 'Купоны, ₽' },
-      1: { labelInLegend: 'Дивиденды, ₽' }
-    })
-    .setOption('colors', ['#43a047', '#fbc02d'])
-    .setOption('backgroundColor', '#ffffff')
-    .setOption('vAxis', { title: '₽' })
-    .setOption('hAxis', { textStyle: { fontSize: 9 } })
-    .setOption('width', 620)
-    .setOption('height', 340)
-    .setPosition(6, 9, 0, 0)
-    .build();
-
-  sh.insertChart(chart);
-}

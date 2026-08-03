@@ -1,5 +1,7 @@
 /**
  * benchmark.js — Сравнение портфеля с IMOEX + единая точка входа «Аналитика доходности»
+ *
+ * Зависимости: readAdvancedParams_() — advparams.js (для инфляции в реальной доходности)
  */
 
 const IMOEX_UID_PROPERTY = 'IMOEX_UID';
@@ -111,14 +113,26 @@ function redrawAnalyticsSection_() {
   let benchRaw = props.getProperty(ANALYTICS_BENCH_PROP);
   if (!xirrRaw && !benchRaw) return;
 
-  renderSection_(sh, ANALYTICS_SECTION_TITLE, function(sh, r, COLS) {
+  renderSection_(sh, ANALYTICS_SECTION_TITLE, function(sh, r, COLS, colStart) {
     if (xirrRaw) {
       let xirr  = JSON.parse(xirrRaw);
       let pct   = xirr.value;
       let bg    = pct === null ? '#9e9e9e' : pct >= 0 ? '#1b5e20' : '#b71c1c';
       let arrow = pct === null ? '' : pct >= 0 ? '▲' : '▼';
       let label = pct === null ? 'н/д' : arrow + ' ' + Math.abs(pct).toFixed(1) + '% годовых';
-      r = renderTile_(sh, r, COLS, '📈 Доходность портфеля (XIRR)', label, bg);
+      r = renderTile_(sh, r, COLS, '📈 Доходность портфеля (XIRR)', label, bg, colStart);
+
+      if (pct !== null) {
+        let params = readAdvancedParams_();
+        // Формула Фишера, не простое вычитание — при инфляции ~6% разница
+        // с "XIRR минус инфляция" уже заметна, а при более высокой — существенна.
+        let realPct = ((1 + pct / 100) / (1 + params.inflationPct / 100) - 1) * 100;
+        let realBg    = realPct >= 0 ? '#1b5e20' : '#b71c1c';
+        let realArrow = realPct >= 0 ? '▲' : '▼';
+        let realLabel = realArrow + ' ' + Math.abs(realPct).toFixed(1) + '% годовых' +
+                        '  (при инфляции ' + params.inflationPct.toFixed(1) + '%)';
+        r = renderTile_(sh, r, COLS, '💰 Реальная доходность (с поправкой на инфляцию)', realLabel, realBg, colStart);
+      }
     }
 
     if (benchRaw) {
@@ -126,24 +140,24 @@ function redrawAnalyticsSection_() {
       let diff  = b.actual - b.hypothetical;
       let bg    = diff >= 0 ? '#1b5e20' : '#b71c1c';
       let arrow = diff >= 0 ? '▲' : '▼';
-      r = renderTile_(sh, r, COLS, '📊 vs IMOEX', arrow + ' ' + rub_(Math.abs(diff)), bg);
+      r = renderTile_(sh, r, COLS, '📊 vs IMOEX', arrow + ' ' + rub_(Math.abs(diff)), bg, colStart);
 
       [['Ваш портфель', rub_(b.actual)], ['Если бы покупали IMOEX', rub_(b.hypothetical)]]
         .forEach(function(row) {
-          sh.getRange(r, 1, 1, 3).merge().setValue(row[0]);
-          sh.getRange(r, 4, 1, COLS - 3).merge().setValue(row[1])
+          sh.getRange(r, colStart, 1, 3).merge().setValue(row[0]);
+          sh.getRange(r, colStart + 3, 1, COLS - 3).merge().setValue(row[1])
             .setFontWeight('bold').setHorizontalAlignment('right');
-          sh.getRange(r, 1, 1, COLS).setBackground(C.EVEN);
+          sh.getRange(r, colStart, 1, COLS).setBackground(C.EVEN);
           r++;
         });
 
       if (b.skipped > 0) {
-        sh.getRange(r, 1, 1, COLS).merge()
+        sh.getRange(r, colStart, 1, COLS).merge()
           .setValue('⚠️ ' + b.skipped + ' пополнений не удалось сопоставить с ценой')
           .setFontColor(C.WARN).setFontStyle('italic').setFontSize(9);
         r++;
       }
     }
     return r;
-  });
+  }, 'right');
 }

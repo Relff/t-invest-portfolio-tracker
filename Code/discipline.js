@@ -78,33 +78,33 @@ function redrawDisciplineSection_() {
   let d = JSON.parse(raw);
   let MONTH_NAMES = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
 
-  renderSection_(sh, DISCIPLINE_SECTION_TITLE, function(sh, r, COLS) {
-    sh.getRange(r, 1, 1, 3).merge().setValue('Месяцев с чистым пополнением').setFontWeight('bold');
-    sh.getRange(r, 4, 1, COLS - 3).merge().setValue(d.positiveCount + ' из ' + d.months.length)
+  renderSection_(sh, DISCIPLINE_SECTION_TITLE, function(sh, r, COLS, colStart) {
+    sh.getRange(r, colStart, 1, 3).merge().setValue('Месяцев с чистым пополнением').setFontWeight('bold');
+    sh.getRange(r, colStart + 3, 1, COLS - 3).merge().setValue(d.positiveCount + ' из ' + d.months.length)
       .setFontWeight('bold').setHorizontalAlignment('right')
       .setFontColor(d.positiveCount >= 10 ? C.OK : d.positiveCount >= 6 ? C.WARN : C.CRIT);
-    sh.getRange(r, 1, 1, COLS).setBackground(C.EVEN);
+    sh.getRange(r, colStart, 1, COLS).setBackground(C.EVEN);
     r++;
 
-    sh.getRange(r, 1, 1, 3).merge().setValue('Среднее сальдо в активный месяц').setFontWeight('bold');
-    sh.getRange(r, 4, 1, COLS - 3).merge().setValue(rub_(d.avgNet))
+    sh.getRange(r, colStart, 1, 3).merge().setValue('Среднее сальдо в активный месяц').setFontWeight('bold');
+    sh.getRange(r, colStart + 3, 1, COLS - 3).merge().setValue(rub_(d.avgNet))
       .setFontWeight('bold').setHorizontalAlignment('right');
-    sh.getRange(r, 1, 1, COLS).setBackground(C.EVEN);
+    sh.getRange(r, colStart, 1, COLS).setBackground(C.EVEN);
     r++; r++;
 
-    sh.getRange(r, 1).setValue('Месяц').setFontWeight('bold');
-    sh.getRange(r, 4, 1, COLS - 3).merge().setValue('Чистое сальдо, ₽').setFontWeight('bold').setHorizontalAlignment('right');
-    sh.getRange(r, 1, 1, COLS).setBackground(C.MID).setFontColor('#ffffff');
+    sh.getRange(r, colStart).setValue('Месяц').setFontWeight('bold');
+    sh.getRange(r, colStart + 3, 1, COLS - 3).merge().setValue('Чистое сальдо, ₽').setFontWeight('bold').setHorizontalAlignment('right');
+    sh.getRange(r, colStart, 1, COLS).setBackground(C.MID).setFontColor('#ffffff');
     r++;
 
     d.months.forEach(function(m, idx) {
       let bg = idx % 2 === 0 ? C.EVEN : C.ODD;
       let clr = m.net > 0 ? C.OK : m.net < 0 ? C.CRIT : C.SKIP;
-      sh.getRange(r, 1).setValue(MONTH_NAMES[m.mo] + ' ' + m.y).setBackground(bg);
-      sh.getRange(r, 4, 1, COLS - 3).merge().setValue(rub_(m.net))
+      sh.getRange(r, colStart).setValue(MONTH_NAMES[m.mo] + ' ' + m.y).setBackground(bg);
+      sh.getRange(r, colStart + 3, 1, COLS - 3).merge().setValue(rub_(m.net))
         .setFontColor(clr).setFontWeight('bold').setHorizontalAlignment('right');
-      sh.getRange(r, 1, 1, COLS).setBackground(bg);
+      sh.getRange(r, colStart, 1, COLS).setBackground(bg);
       r++;
     });
-  });
+  }, 'right');
 }

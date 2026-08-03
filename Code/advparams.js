@@ -11,6 +11,7 @@ const ADV_PARAMS_DEFAULTS_ = {
   healthTop1Warn: 15, healthTop1Crit: 25,
   healthTop3Warn: 35, healthTop3Crit: 50,
   fifoYears: 5,
+  inflationPct: 6.0, // на конец июля 2026 годовая инфляция в РФ ~5.9% (ЦБ) — обнови при желании
 };
 
 const ADV_PARAMS_LABELS_ = {
@@ -21,6 +22,7 @@ const ADV_PARAMS_LABELS_ = {
   'Health: топ-3 предупреждение (%)':      'healthTop3Warn',
   'Health: топ-3 критично (%)':            'healthTop3Crit',
   'FIFO — глубина истории (лет)':          'fifoYears',
+  'Инфляция, % годовых':                   'inflationPct',
 };
 
 function readAdvancedParams_() {
@@ -46,11 +48,31 @@ function addAdvancedParamsBlock() {
   if (!sh) { SpreadsheetApp.getUi().alert('⚠️ Сначала запустите initConfig()'); return; }
 
   let vals = sh.getDataRange().getValues();
+  let blockHeaderRow = -1, lastParamRow = -1, hasInflation = false;
   for (let i = 0; i < vals.length; i++) {
-    if (String(vals[i][0]).indexOf('ПРОДВИНУТЫЕ ПАРАМЕТРЫ') >= 0) {
-      SpreadsheetApp.getUi().alert('Блок «Продвинутые параметры» уже существует.');
+    let label = String(vals[i][0]).trim();
+    if (label.indexOf('ПРОДВИНУТЫЕ ПАРАМЕТРЫ') >= 0) blockHeaderRow = i;
+    if (blockHeaderRow !== -1 && ADV_PARAMS_LABELS_[label]) lastParamRow = i; // последняя строка-параметр внутри блока
+    if (label === 'Инфляция, % годовых') hasInflation = true;
+  }
+
+  if (blockHeaderRow !== -1) {
+    if (hasInflation) {
+      SpreadsheetApp.getUi().alert('Блок «Продвинутые параметры» уже содержит поле «Инфляция, % годовых» — добавлять нечего.');
       return;
     }
+    // Блок уже есть (с прошлой версии) — дописываем только новую строку
+    // сразу после последнего существующего параметра, остальное не трогаем.
+    let insertAfterRow = lastParamRow + 1; // 0-indexed → 1-indexed строка ПОСЛЕ
+    sh.insertRowAfter(insertAfterRow);
+    let newRow = insertAfterRow + 1;
+    sh.getRange(newRow, 1, 1, 3).setValues([[
+      'Инфляция, % годовых', ADV_PARAMS_DEFAULTS_.inflationPct,
+      'Для расчёта реальной доходности (XIRR с поправкой на инфляцию) — обновляй периодически по данным ЦБ РФ'
+    ]]);
+    SpreadsheetApp.getUi().alert('✅ Добавил поле «Инфляция, % годовых» (по умолчанию ' +
+      ADV_PARAMS_DEFAULTS_.inflationPct + '%) в существующий блок «Продвинутые параметры».');
+    return;
   }
 
   let lastRow = sh.getLastRow() + 2;
@@ -66,6 +88,7 @@ function addAdvancedParamsBlock() {
     ['Health: топ-3 предупреждение (%)',      d.healthTop3Warn,  ''],
     ['Health: топ-3 критично (%)',            d.healthTop3Crit,  ''],
     ['FIFO — глубина истории (лет)',          d.fifoYears,       'Сколько лет назад искать сделки для средней цены'],
+    ['Инфляция, % годовых',                   d.inflationPct,    'Для расчёта реальной доходности (XIRR с поправкой на инфляцию) — обновляй периодически по данным ЦБ РФ'],
   ];
 
   sh.getRange(lastRow, 1, block.length, 3).setValues(block);

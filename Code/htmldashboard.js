@@ -11,6 +11,9 @@
  *              AVGPRICE_PROP — avgprice.js
  *              INCOME_TOTALS_DATA — income.js
  *              DISCIPLINE_DATA — discipline.js
+ *              SECTOR_DIVERSIFICATION_DATA — sectors.js
+ *              CALENDAR_MONTHLY_INCOME_DATA — calendar.js
+ *              readAdvancedParams_() — advparams.js (инфляция для реальной доходности)
  *
  * Радар «Факт vs Цель» строится по ВСЕМ категориям из classTargets (даже
  * с нулевым фактом) — иначе форма радара нечестно скрывала бы недостающие
@@ -21,7 +24,7 @@ function showHtmlDashboard() {
   let payload = getDashboardPayload_();
   let template = HtmlService.createTemplate(HTML_DASHBOARD_TEMPLATE_);
   template.dataJson = JSON.stringify(payload);
-  let html = template.evaluate().setWidth(760).setHeight(950);
+  let html = template.evaluate().setWidth(760).setHeight(1050);
   SpreadsheetApp.getUi().showModalDialog(html, '📊 Дашборд портфеля');
 }
 
@@ -57,6 +60,16 @@ function getDashboardPayload_() {
   let benchRaw = props.getProperty('ANALYTICS_BENCH_VALUE');
 
   let xirr = xirrRaw ? JSON.parse(xirrRaw).value : null;
+
+  // Реальная доходность (с поправкой на инфляцию) — формула Фишера,
+  // используем ту же настраиваемую инфляцию, что и на листе Дашборд.
+  let realXirr = null;
+  let inflationPct = null;
+  if (xirr !== null) {
+    let advParams = readAdvancedParams_();
+    inflationPct = advParams.inflationPct;
+    realXirr = ((1 + xirr / 100) / (1 + inflationPct / 100) - 1) * 100;
+  }
   let bench = benchRaw ? JSON.parse(benchRaw) : null;
 
   // P/L по акциям — переиспользуем уже посчитанные данные из avgprice.js,
@@ -75,6 +88,22 @@ function getDashboardPayload_() {
       })
       .sort(function(a, b) { return b.plPct - a.plPct; });
   }
+
+  // Секторная диверсификация акций — переиспользуем уже посчитанные данные
+  // из sectors.js, новых запросов не делаем.
+  let sectorRaw = props.getProperty('SECTOR_DIVERSIFICATION_DATA');
+  let sectorAllocation = [];
+  if (sectorRaw) {
+    let sd = JSON.parse(sectorRaw);
+    sectorAllocation = sd.rows.map(function(r) {
+      return { name: r.sector, pct: Math.round(r.pct * 1000) / 10, valueRub: r.valueRub };
+    });
+  }
+
+  // Пассивный доход по месяцам — переехал сюда с листа «Календарь выплат»
+  // (там раньше была отдельная встроенная диаграмма, теперь дублирует эту).
+  let monthlyIncomeRaw = props.getProperty('CALENDAR_MONTHLY_INCOME_DATA');
+  let monthlyIncome = monthlyIncomeRaw ? JSON.parse(monthlyIncomeRaw) : [];
 
   // Прогноз денежного потока на месяц вперёд — переиспользуем уже
   // посчитанные средние (доход/год из income.js, дисциплина пополнений
@@ -145,11 +174,15 @@ function getDashboardPayload_() {
   return {
     totalRub: Math.round(totalRub),
     xirr: xirr,
+    realXirr: realXirr,
+    inflationPct: inflationPct,
     bench: bench,
     allocation: allocation,
     radarAllocation: radarAllocation,
     maxDrawdown: maxDrawdown,
     plStocks: plStocks,
+    sectorAllocation: sectorAllocation,
+    monthlyIncome: monthlyIncome,
     cashForecast: cashForecast,
     history: history,
   };
@@ -212,6 +245,11 @@ const HTML_DASHBOARD_TEMPLATE_ = `
       } else {
         cardsHtml += card_('XIRR', 'н/д', '');
       }
+      if (data.realXirr !== null) {
+        let cls = data.realXirr >= 0 ? 'pos' : 'neg';
+        cardsHtml += card_('Реальная (инфл. ' + data.inflationPct.toFixed(1) + '%)',
+          (data.realXirr >= 0 ? '+' : '') + data.realXirr.toFixed(1) + '%', cls);
+      }
       if (data.bench) {
         let diff = data.bench.actual - data.bench.hypothetical;
         let cls = diff >= 0 ? 'pos' : 'neg';
@@ -257,6 +295,8 @@ const HTML_DASHBOARD_TEMPLATE_ = `
         '<div class="chart-box"><h3>Рост портфеля во времени' + rangeButtonsHtml + '</h3><canvas id="growthChart"></canvas></div>' +
         '<div class="chart-box"><h3>История доходности (XIRR)</h3><canvas id="xirrChart"></canvas></div>' +
         '<div class="chart-box"><h3>P/L по акциям</h3><canvas id="plChart"></canvas></div>' +
+        '<div class="chart-box"><h3>Секторная диверсификация</h3><canvas id="sectorChart"></canvas></div>' +
+        '<div class="chart-box"><h3>Пассивный доход по месяцам</h3><canvas id="monthlyIncomeChart"></canvas></div>' +
         '<div class="watermark">t-invest-portfolio-tracker · <a href="https://github.com/Relff/t-invest-portfolio-tracker" target="_blank">github.com/Relff/t-invest-portfolio-tracker</a></div>';
 
       if (data.allocation.length) {
@@ -399,6 +439,70 @@ const HTML_DASHBOARD_TEMPLATE_ = `
       } else {
         document.getElementById('plChart').parentElement.innerHTML =
           '<h3>P/L по акциям</h3><div class="empty">Сначала запусти «Средняя цена и P/L» в меню Tinkoff → 🎯 Аналитика.</div>';
+      }
+
+      if (data.sectorAllocation && data.sectorAllocation.length) {
+        let sectorEl = document.getElementById('sectorChart');
+        sectorEl.parentElement.style.height = (36 * data.sectorAllocation.length + 40) + 'px';
+        let sectorColors = ['#1565c0', '#0d47a1', '#43a047', '#ef6c00', '#8e24aa', '#00838f', '#c0ca33', '#6d4c41'];
+        new Chart(sectorEl, {
+          type: 'bar',
+          data: {
+            labels: data.sectorAllocation.map(s => s.name),
+            datasets: [{
+              label: '% от акций',
+              data: data.sectorAllocation.map(s => s.pct),
+              backgroundColor: data.sectorAllocation.map((s, i) => sectorColors[i % sectorColors.length]),
+              borderRadius: 4,
+              maxBarThickness: 22,
+            }]
+          },
+          options: {
+            indexAxis: 'y',
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: function(ctx) {
+                    let s = data.sectorAllocation[ctx.dataIndex];
+                    return s.pct.toFixed(1) + '%  (' + fmt_(s.valueRub) + ' ₽)';
+                  }
+                }
+              }
+            },
+            scales: {
+              x: { ticks: { font: { size: 9 }, callback: v => v + '%' } },
+              y: { ticks: { font: { size: 10 } } },
+            }
+          }
+        });
+      } else {
+        document.getElementById('sectorChart').parentElement.innerHTML =
+          '<h3>Секторная диверсификация</h3><div class="empty">Заполни сектора в Config (Tinkoff → ⚙️ Настройки → Добавить блок секторов акций) и запусти расчёт.</div>';
+      }
+
+      if (data.monthlyIncome && data.monthlyIncome.length) {
+        new Chart(document.getElementById('monthlyIncomeChart'), {
+          type: 'bar',
+          data: {
+            labels: data.monthlyIncome.map(m => m.label),
+            datasets: [
+              { label: 'Купоны, ₽', data: data.monthlyIncome.map(m => m.coupons), backgroundColor: '#43a047', stack: 's' },
+              { label: 'Дивиденды, ₽', data: data.monthlyIncome.map(m => m.dividends), backgroundColor: '#fbc02d', stack: 's' },
+            ]
+          },
+          options: {
+            plugins: { legend: { position: 'top', labels: { font: { size: 10 }, boxWidth: 10 } } },
+            scales: {
+              x: { stacked: true, ticks: { font: { size: 9 } } },
+              y: { stacked: true, ticks: { font: { size: 9 } } },
+            }
+          }
+        });
+      } else {
+        document.getElementById('monthlyIncomeChart').parentElement.innerHTML =
+          '<h3>Пассивный доход по месяцам</h3><div class="empty">Сначала обнови «Календарь выплат» в меню Tinkoff → 💰 Доход и история.</div>';
       }
     }
 

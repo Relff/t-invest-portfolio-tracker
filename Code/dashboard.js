@@ -16,12 +16,12 @@ const SRC = {
 };
 
 const DST = {
-  CONFIG:    'Настройки',
-  DASHBOARD: 'Дашборд',
-  REBALANCE: 'Ребалансировка',
-  INCOME:    'Ожидаемый доход',
-  CALENDAR:  'Календарь выплат',
-  HISTORY:   'История операций',
+  CONFIG:    '⚙️ Настройки',
+  DASHBOARD: '📊 Дашборд',
+  REBALANCE: '💰 Ребалансировка',
+  INCOME:    '💵 Ожидаемый доход',
+  CALENDAR:  '📅 Календарь выплат',
+  HISTORY:   '📜 История операций',
   POSITIONS: '_Позиции',
 };
 
@@ -58,45 +58,88 @@ function deviationStatus_(actPct, tgtPct) {
 // 2. МЕНЮ
 // ════════════════════════════════════════════════════════════════════
 
+/**
+ * Разовая миграция: переименовывает уже существующие вкладки листов под
+ * новые имена с эмодзи (см. DST, CORR_SHEET, REBAL_HISTORY_SHEET).
+ * Без нужды не запускать больше одного раза — но и повторный запуск
+ * безопасен: если вкладка уже переименована, просто пропускается.
+ */
+function renameSheetTabsWithEmoji() {
+  let ss = SpreadsheetApp.getActive();
+  let renames = [
+    ['Настройки', DST.CONFIG],
+    ['Дашборд', DST.DASHBOARD],
+    ['Ребалансировка', DST.REBALANCE],
+    ['Ожидаемый доход', DST.INCOME],
+    ['Календарь выплат', DST.CALENDAR],
+    ['История операций', DST.HISTORY],
+    ['Корреляция акций', CORR_SHEET],
+    ['История ребалансировок', REBAL_HISTORY_SHEET],
+  ];
+  let renamed = [];
+  renames.forEach(function(pair) {
+    let oldName = pair[0], newName = pair[1];
+    if (oldName === newName) return;
+    let sh = ss.getSheetByName(oldName);
+    if (sh) { sh.setName(newName); renamed.push(newName); }
+  });
+  SpreadsheetApp.getUi().alert(renamed.length
+    ? '✅ Переименовано вкладок: ' + renamed.length + '\n\n' + renamed.join('\n')
+    : 'Нечего переименовывать — либо уже переименовано, либо листы ещё не созданы.');
+}
+
+/**
+ * Одна кнопка вместо десяти: пересчитывает всё содержимое листа «Дашборд»
+ * разом (P/L, Yield on Cost, Health check, ЛДВ, Дисциплина, XIRR+IMOEX
+ * + опциональные блоки). Опциональные блоки (ИИС-3, сектора, цель
+ * портфеля) тихо пропускаются, если ещё не настроены в Config — иначе
+ * при каждом обычном обновлении заваливало бы тремя алертами
+ * «сначала настрой», что убивало бы весь смысл кнопки «в один клик».
+ */
+function updateDashboardAll() {
+  updateDashboard(); // уже сама пересчитывает Аналитику, Дисциплину и Health check внутри себя
+  calculateAveragePriceAndPL();
+  calculateYieldOnCost();
+  calculateLdvEligibility();
+
+  if (readIisAccountName_())               calculateIisDeductionUsage();
+  if (Object.keys(readSectorMap_()).length) calculateSectorDiversification();
+  if (readGoalTarget_() > 0)                calculateGoalProgress();
+
+  SpreadsheetApp.getUi().alert('✅ Дашборд полностью обновлён.');
+}
+
 function onOpen() {
   let ui = SpreadsheetApp.getUi();
   let menu = ui.createMenu('Tinkoff');
 
   menu.addItem('🔄  Синхронизировать позиции', 'syncTinkoffPositions')
       .addItem('🚀  Синхронизировать + обновить всё', 'syncAndRefresh')
+      .addSeparator()
+      .addItem('🔄  Обновить Dashboard (всё)', 'updateDashboardAll')
       .addSeparator();
 
-  menu.addSubMenu(ui.createMenu('📊 Дашборд и ребаланс')
-        .addItem('Обновить Dashboard', 'updateDashboard')
-        .addItem('Рассчитать доходность (XIRR + IMOEX)', 'calculateAnalytics')
-        .addItem('Пересчитать калькулятор пополнения', 'calculateRebalance')
-        .addItem('История ребалансировок: сравнить с фактом', 'compareRebalanceExecution')
-        .addItem('Прогресс к цели', 'calculateGoalProgress'))
+  menu.addSubMenu(ui.createMenu('📊 Ребаланс и отчёты')
+        .addItem('💰 Пересчитать калькулятор пополнения', 'calculateRebalance')
+        .addItem('📋 История ребалансировок: сравнить с фактом', 'compareRebalanceExecution')
+        .addItem('📄 Сформировать годовой отчёт', 'generateAnnualReport')
+        .addItem('📈 Открыть HTML-дашборд', 'showHtmlDashboard'))
       .addSubMenu(ui.createMenu('💰 Доход и история')
-        .addItem('Обновить Ожидаемый доход', 'updateIncomeSheet')
-        .addItem('Обновить Календарь выплат', 'updateCalendarSheet')
-        .addItem('Обновить Историю операций', 'updateHistorySheet'))
-      .addSubMenu(ui.createMenu('🎯 Аналитика (вручную)')
-        .addItem('Средняя цена и P/L', 'calculateAveragePriceAndPL')
-        .addItem('Yield on Cost', 'calculateYieldOnCost')
-        .addItem('Health check концентрации', 'calculateConcentrationHealth')
-        .addItem('ИИС-3 — вычет за год', 'calculateIisDeductionUsage')
-        .addItem('Льгота на долгосрочное владение (ЛДВ)', 'calculateLdvEligibility')
-        .addItem('Доп. бенчмарки (RGBI, золото)', 'calculateExtraBenchmarks')
-        .addItem('Корреляция между акциями', 'calculateStockCorrelation')
-        .addItem('Дисциплина пополнений', 'calculateContributionDiscipline'))
-      .addSubMenu(ui.createMenu('📄 Отчёты')
-        .addItem('Сформировать годовой отчёт', 'generateAnnualReport')
-        .addItem('Открыть HTML-дашборд', 'showHtmlDashboard'))
-      .addSeparator()
-      .addSubMenu(ui.createMenu('⚙️ Настройки')
-        .addItem('Инициализировать Config', 'initConfig')
-        .addItem('Добавить блок дивидендов', 'addDividendsBlock')
-        .addItem('Добавить блок продвинутых параметров', 'addAdvancedParamsBlock')
-        .addItem('Добавить блок ИИС-3', 'addIisBlock')
-        .addItem('Добавить блок цели портфеля', 'addGoalBlock')
-        .addItem('Проверить подключение Telegram', 'testTelegramConnection'));
-        
+        .addItem('💵 Обновить Ожидаемый доход', 'updateIncomeSheet')
+        .addItem('📅 Обновить Календарь выплат', 'updateCalendarSheet')
+        .addItem('📜 Обновить Историю операций', 'updateHistorySheet'))
+      .addSubMenu(ui.createMenu('🧮 Тяжёлая аналитика (не для частого использования)')
+        .addItem('🔗 Корреляция между акциями', 'calculateStockCorrelation')
+        .addItem('🥇 Доп. бенчмарки (RGBI, золото)', 'calculateExtraBenchmarks'))
+      .addSubMenu(ui.createMenu('⚙️ Настройки (Config)')
+        .addItem('🆕 Инициализировать Config', 'initConfig')
+        .addItem('💵 Добавить блок дивидендов', 'addDividendsBlock')
+        .addItem('🎛️ Добавить блок продвинутых параметров', 'addAdvancedParamsBlock')
+        .addItem('🏦 Добавить блок ИИС-3', 'addIisBlock')
+        .addItem('🎯 Добавить блок цели портфеля', 'addGoalBlock')
+        .addItem('🏭 Добавить блок секторов акций', 'addSectorsBlock'))
+      .addSubMenu(ui.createMenu('🤖 Telegram')
+        .addItem('📡 Проверить подключение', 'testTelegramConnection'));
 
   menu.addToUi();
 }
@@ -286,6 +329,15 @@ function updateDashboard() {
   let ss = SpreadsheetApp.getActive();
   let sh = ss.getSheetByName(DST.DASHBOARD);
   if (!sh) sh = ss.insertSheet(DST.DASHBOARD);
+
+  // clearContents()/clearFormats() НЕ снимают объединение ячеек — это
+  // отдельное структурное свойство. Без явного breakApart() старое
+  // объединение заголовка (ещё на 6 колонок, с прошлой версии) конфликтует
+  // с новым на всю ширину (13 колонок) — Sheets API кидает ошибку
+  // "необходимо выделить весь диапазон", хотя вручную это разрешено.
+  if (sh.getMaxRows() > 0 && sh.getMaxColumns() > 0) {
+    sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();
+  }
   sh.clearContents();
   sh.clearFormats();
 
@@ -303,16 +355,28 @@ function updateDashboard() {
   let tz       = Session.getScriptTimeZone();
   let now      = Utilities.formatDate(new Date(), tz, 'dd.MM.yyyy HH:mm');
   let COLS     = 6;
+  let FULL_W   = 13; // левая колонка (1-6) + отступ (7) + правая колонка (8-13) — вся ширина дашборда
   let r        = 1;
 
-  mergedCell_(sh, r, 1, 1, COLS,
+  mergedCell_(sh, r, 1, 1, FULL_W,
     '📊  ДАШБОРД ПОРТФЕЛЯ',
     { bg: C.DARK, fg: '#ffffff', bold: true, size: 14, align: 'center' });
   r++;
 
-  mergedCell_(sh, r, 1, 1, COLS,
-    'Обновлено: ' + now + '   ·   Общий портфель: ' + rub_(totalRub),
-    { bg: '#263238', fg: '#b0bec5', align: 'center' });
+  // Сумма портфеля — самая важная цифра на листе, выделяем её крупнее
+  // и белым на фоне остального (более блёклого) текста подзаголовка.
+  let prefixText = 'Обновлено: ' + now + '   ·   Общий портфель: ';
+  let valueText  = rub_(totalRub);
+  let subtitleText = prefixText + valueText;
+  let richText = SpreadsheetApp.newRichTextValue()
+    .setText(subtitleText)
+    .setTextStyle(0, prefixText.length,
+      SpreadsheetApp.newTextStyle().setForegroundColor('#b0bec5').setFontSize(10).build())
+    .setTextStyle(prefixText.length, subtitleText.length,
+      SpreadsheetApp.newTextStyle().setForegroundColor('#ffffff').setBold(true).setFontSize(13).build())
+    .build();
+  sh.getRange(r, 1, 1, FULL_W).merge().setRichTextValue(richText)
+    .setBackground('#263238').setHorizontalAlignment('center');
   r += 2;
 
   mergedCell_(sh, r, 1, 1, COLS, '▌ РАСПРЕДЕЛЕНИЕ ПО КЛАССАМ',
@@ -380,6 +444,14 @@ function updateDashboard() {
   [260, 70, 155, 105, 80, 145].forEach(function(w, i) {
     sh.setColumnWidth(i + 1, w);
   });
+  sh.setColumnWidth(7, 24); // узкий отступ между левой и правой колонкой
+  [180, 90, 90, 90, 90, 90].forEach(function(w, i) {
+    sh.setColumnWidth(8 + i, w);
+  });
+  // Тонкая граница между колонками — на масштабе 60% пустой отступ сам
+  // по себе плохо читается, с чёткой линией сразу видно, где раздел.
+  sh.getRange(4, 6, 297, 1).setBorder(null, null, null, true, null, null,
+    '#7986cb', SpreadsheetApp.BorderStyle.SOLID);
   sh.setFrozenRows(4);
   addDashboardCharts();
   calculateAnalytics();
@@ -400,6 +472,7 @@ function syncAndRefresh() {
   updateCalendarSheet();
   hideDataSheets(false);
   checkAndNotifyDeviations_();
+  checkIisDividendHint_();
   notifySyncComplete_();
 }
 

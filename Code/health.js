@@ -23,20 +23,51 @@ function calculateConcentrationHealth() {
 }
 
 function concentrationStats_(positions, total) {
-  if (!positions.length || total <= 0) return { top1Name: null, top1Pct: 0, top3Names: [], top3Pct: 0 };
+  if (!positions.length || total <= 0) {
+    return { top1Name: null, top1Pct: 0, top3Names: [], top3Pct: 0, hhi: 0, effectiveN: 0 };
+  }
   let sorted = positions.slice().sort(function(a, b) { return b.valueRub - a.valueRub; });
   let top3 = sorted.slice(0, 3);
+
+  // Индекс Херфиндаля-Хиршмана — сумма квадратов долей (0..1). 1 = всё
+  // в одной бумаге, ближе к 0 = равномерно размазано по многим позициям.
+  // «Эффективное число позиций» (1/HHI) — интуитивнее: говорит, что
+  // портфель ведёт себя так, будто состоит из N РАВНЫХ долей, даже если
+  // реальных позиций в нём заметно больше (или меньше).
+  let hhi = sorted.reduce(function(s, p) {
+    let w = p.valueRub / total;
+    return s + w * w;
+  }, 0);
+  let effectiveN = hhi > 0 ? 1 / hhi : 0;
+
   return {
     top1Name: sorted[0].name,
     top1Pct:  sorted[0].valueRub / total,
     top3Names: top3.map(function(p) { return p.name; }),
     top3Pct:   top3.reduce(function(s, p) { return s + p.valueRub; }, 0) / total,
+    hhi: hhi,
+    effectiveN: effectiveN,
+    realN: sorted.length,
   };
 }
 
 function healthColor_(pct, warnThr, critThr) {
   if (pct >= critThr) return C.CRIT;
   if (pct >= warnThr) return C.WARN;
+  return C.OK;
+}
+
+/**
+ * Цвет для HHI/эффективного числа позиций — по соотношению «эффективное
+ * число» к реальному количеству позиций. 1.0 = идеально равномерно
+ * (реальные позиции = эффективные), ближе к 0 = пара бумаг фактически
+ * определяют весь портфель, остальные — статисты.
+ */
+function hhiColor_(stats) {
+  if (!stats.realN) return C.SKIP;
+  let ratio = stats.effectiveN / stats.realN;
+  if (ratio < 0.4) return C.CRIT;
+  if (ratio < 0.7) return C.WARN;
   return C.OK;
 }
 
@@ -49,12 +80,12 @@ function redrawHealthSection_() {
   let d = JSON.parse(raw);
   let params = readAdvancedParams_();
 
-  renderSection_(sh, HEALTH_SECTION_TITLE, function(sh, r, COLS) {
+  renderSection_(sh, HEALTH_SECTION_TITLE, function(sh, r, COLS, colStart) {
     function writeRow_(label, valueText, clr) {
-      sh.getRange(r, 1, 1, 3).merge().setValue(label).setFontWeight('bold');
-      sh.getRange(r, 4, 1, COLS - 3).merge().setValue(valueText)
+      sh.getRange(r, colStart, 1, 3).merge().setValue(label).setFontWeight('bold');
+      sh.getRange(r, colStart + 3, 1, COLS - 3).merge().setValue(valueText)
         .setFontColor(clr).setFontWeight('bold').setHorizontalAlignment('right');
-      sh.getRange(r, 1, 1, COLS).setBackground(C.EVEN);
+      sh.getRange(r, colStart, 1, COLS).setBackground(C.EVEN);
       r++;
     }
 
@@ -64,6 +95,8 @@ function redrawHealthSection_() {
         healthColor_(ov.top1Pct, params.healthTop1Warn / 100, params.healthTop1Crit / 100));
       writeRow_('Топ-3 позиции (весь портфель)', (ov.top3Pct * 100).toFixed(1) + '%',
         healthColor_(ov.top3Pct, params.healthTop3Warn / 100, params.healthTop3Crit / 100));
+      writeRow_('Индекс Херфиндаля (весь портфель)', ov.hhi.toFixed(3), hhiColor_(ov));
+      writeRow_('Эффективное число позиций', ov.effectiveN.toFixed(1) + ' из ' + ov.realN + ' реальных', hhiColor_(ov));
     }
 
     let sc = d.shares;
@@ -72,6 +105,8 @@ function redrawHealthSection_() {
         healthColor_(sc.top1Pct, params.healthTop1Warn / 100, params.healthTop1Crit / 100));
       writeRow_('Топ-3 акции (доля от акционной части)', (sc.top3Pct * 100).toFixed(1) + '%',
         healthColor_(sc.top3Pct, params.healthTop3Warn / 100, params.healthTop3Crit / 100));
+      writeRow_('Индекс Херфиндаля (акции)', sc.hhi.toFixed(3), hhiColor_(sc));
+      writeRow_('Эффективное число акций', sc.effectiveN.toFixed(1) + ' из ' + sc.realN + ' реальных', hhiColor_(sc));
     }
-  });
+  }, 'right', '#6d4c41');
 }

@@ -3,6 +3,13 @@
  *
  * v5: дивиденды теперь считаются автоматически из истории выплат (GetDividends),
  * если не заданы вручную в Config → Блок 4. Ручной ввод остаётся приоритетным.
+ * v6: автооценка дивидендов теперь по CAGR-прогнозу (fetchDividendProjection_) —
+ * учитывает темп роста выплат за последние годы, а не только факт за 12 мес.
+ * v7: добавлен Payout Ratio по EPS (урезанный Dividend Safety Score) —
+ * T-Invest API не даёт надёжный FCF, поэтому только EPS.
+ * v8: Payout считается по ФАКТУ дивиденда за 12 мес. (не по CAGR-прогнозу —
+ * сравнивать прогноз с прошлогодним EPS нечестно), вынесен в отдельную
+ * колонку таблицы вместо текста в примечании.
  */
 
 const BOND_TOP_N = 15;
@@ -46,7 +53,7 @@ function updateIncomeSheet() {
   var grandTotal = shareTotal + bondTotal;
   var yieldPct   = totalRub > 0 ? (grandTotal / totalRub * 100) : 0;
 
-  var COLS = 7;
+  var COLS = 8;
   var r    = 1;
 
   // ── ШАПКА ─────────────────────────────────────────────────────────
@@ -84,7 +91,7 @@ function updateIncomeSheet() {
     { bg: C.DARK, fg: '#ffffff', bold: true, size: 12 });
   r++;
   hdrRow_(sh, r,
-    ['Название','Тикер','Кол-во','Дивиденд/акц, ₽','Доход в год, ₽','% порт.','Примечание'],
+    ['Название','Тикер','Кол-во','Дивиденд/акц, ₽','Доход в год, ₽','% порт.','Примечание','Payout'],
     COLS);
   r++;
 
@@ -107,7 +114,7 @@ function updateIncomeSheet() {
     { bg: C.DARK, fg: '#ffffff', bold: true, size: 12 });
   r++;
   hdrRow_(sh, r,
-    ['Название','Тикер','Кол-во','Купон/год на шт, ₽','Доход в год, ₽','% порт.','Купонов'],
+    ['Название','Тикер','Кол-во','Купон/год на шт, ₽','Доход в год, ₽','% порт.','Купонов',''],
     COLS);
   r++;
 
@@ -130,7 +137,7 @@ function updateIncomeSheet() {
       '…ещё ' + restBonds.length + ' облигаций',
       '', '', '',
       restIncome, restPct,
-      'сумма купонов: ' + rub_(restIncome)
+      'сумма купонов: ' + rub_(restIncome), ''
     ]]).setBackground(restBg).setFontStyle('italic').setFontColor('#546e7a');
     sh.getRange(r, 5).setNumberFormat('#,##0 [$₽-ru-RU]')
       .setBackground('#e3f2fd').setFontColor('#0d47a1')
@@ -200,7 +207,7 @@ function updateIncomeSheet() {
   }));
 
   // ── Ширина колонок ────────────────────────────────────────────────
-  [255, 65, 75, 135, 155, 80, 200].forEach(function(w,i){
+  [255, 65, 75, 135, 155, 80, 210, 80].forEach(function(w,i){
     sh.setColumnWidth(i+1, w);
   });
   sh.setFrozenRows(6);
@@ -262,21 +269,46 @@ function getTotalPortfolioValue_() {
 // ════════════════════════════════════════════════════════════════════
 
 function calcShareIncome_(positions, divMap, figiMap, totalRub) {
-  return positions.map(function(p) {
-    var div = findDividend_(p.name, p.ticker, divMap);
+  var assetUidMap = buildAssetUidMap_(); // один запрос на всю таблицу, не на каждую акцию
 
-    // Если в Config ничего не задано (0 или отсутствует) — считаем сами из истории API
-    if (div.amount <= 0) {
-      var figi = p.figi || (figiMap && (figiMap[p.name] || figiMap[p.ticker])) || '';
-      if (figi) {
-        var hist = fetchAnnualDividendFromHistory_(figi);
-        Utilities.sleep(50);
-        if (hist.perUnit > 0) div = { amount: hist.perUnit, note: hist.note };
+  return positions.map(function(p) {
+    var div  = findDividend_(p.name, p.ticker, divMap);
+    var figi = p.figi || (figiMap && (figiMap[p.name] || figiMap[p.ticker])) || '';
+
+    // payoutBasis — именно ФАКТ дивиденда за 12 мес., для честного сравнения
+    // с EPS (тоже TTM-факт). По умолчанию — то же, что и amount (например,
+    // вручную заданное в Config), но если дивиденд считаем сами — берём
+    // hist.trailing12, а НЕ hist.perUnit: perUnit может быть CAGR-прогнозом
+    // на будущий год, а сравнивать прогноз с прошлогодним EPS — заведомо
+    // нечестно (отсюда Payout за 200%+ у растущих компаний).
+    var payoutBasis = div.amount;
+
+    // Если в Config ничего не задано (0 или отсутствует) — считаем сами,
+    // с приоритетом на CAGR-прогноз роста (fetchDividendProjection_)
+    if (div.amount <= 0 && figi) {
+      var hist = fetchDividendProjection_(figi);
+      Utilities.sleep(50);
+      if (hist.perUnit > 0) {
+        div = { amount: hist.perUnit, note: hist.note };
+        payoutBasis = hist.trailing12;
       }
     }
 
     var incomePerUnit = div.amount;
     var incomeYear    = incomePerUnit * p.qty;
+
+    // Payout Ratio по EPS — насколько дивиденд (факт за 12 мес.) "съедает"
+    // прибыль на акцию. Урезанная версия Dividend Safety Score: T-Invest
+    // API не даёт надёжный FCF (часто нули), поэтому только EPS —
+    // единственное реально заполняемое поле. GetAssetFundamentals ждёт
+    // asset_uid, не figi — берём его из assetUidMap. См. dividendSafetyLabel_().
+    var assetUid   = figi ? assetUidMap[figi] : null;
+    var payoutInfo = null;
+    if (payoutBasis > 0 && assetUid) {
+      payoutInfo = dividendSafetyLabel_(payoutBasis, assetUid);
+      Utilities.sleep(50);
+    }
+
     return {
       name:          p.name,
       ticker:        p.ticker,
@@ -285,6 +317,8 @@ function calcShareIncome_(positions, divMap, figiMap, totalRub) {
       incomeYear:    incomeYear,
       valueRub:      p.valueRub,
       note:          div.note,
+      payoutText:    (payoutInfo && payoutInfo.label !== 'н/д') ? payoutInfo.label : '',
+      payoutColor:   (payoutInfo && payoutInfo.color) ? payoutInfo.color : null,
     };
   });
 }
@@ -314,6 +348,87 @@ function calcBondIncome_(positions, figiMap, totalRub) {
 // КУПОНЫ ЧЕРЕЗ T-INVEST API
 // ════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════
+// PAYOUT RATIO ПО EPS (урезанный Dividend Safety Score)
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * buildAssetUidMap_ — карта figi → asset_uid, ОДНИМ запросом (GetAssets).
+ *
+ * У T-Invest API два РАЗНЫХ идентификатора: figi (используется почти
+ * везде — GetDividends, GetBondCoupons и т.д.) и asset_uid — судя по
+ * официальной proto-схеме (Asset.uid + AssetInstrument.figi), именно
+ * его ждёт GetAssetFundamentals, а не figi. Строим карту заранее, а не
+ * дёргаем по одному запросу на каждую акцию — иначе цена одной лишней
+ * метрики была бы в 2 раза больше запросов, чем нужно.
+ */
+function buildAssetUidMap_() {
+  var map = {};
+  try {
+    var resp = tiFetch_(
+      '/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetAssets', {}
+    );
+    var assets = resp.assets || [];
+    assets.forEach(function(asset) {
+      (asset.instruments || []).forEach(function(instr) {
+        if (instr.figi) map[instr.figi] = asset.uid;
+      });
+    });
+    Logger.log('buildAssetUidMap_: построена карта на ' + Object.keys(map).length + ' figi');
+  } catch (e) {
+    Logger.log('buildAssetUidMap_: ОШИБКА — ' + e.message);
+  }
+  return map;
+}
+
+/**
+ * fetchAssetFundamentals_ — фундаментальные показатели по бумаге через
+ * T-Invest API (GetAssetFundamentals), уже по правильному asset_uid.
+ * Данные доступны НЕ по всем бумагам (недавние листинги, некоторые бумаги
+ * без покрытия) — в таком случае тихо возвращает null, без ошибки.
+ */
+function fetchAssetFundamentals_(assetUid) {
+  if (!assetUid) return null;
+  try {
+    var resp = tiFetch_(
+      '/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetAssetFundamentals',
+      { assets: [assetUid] }
+    );
+    var list = resp.fundamentals || [];
+    Logger.log('fetchAssetFundamentals_(' + assetUid + '): получено ' + list.length +
+      ' записей. Сырой ответ: ' + JSON.stringify(resp).substring(0, 500));
+    return list.length ? list[0] : null;
+  } catch (e) {
+    Logger.log('fetchAssetFundamentals_(' + assetUid + '): ОШИБКА — ' + e.message);
+    return null;
+  }
+}
+
+/**
+ * Payout Ratio = дивиденд на акцию / EPS (прибыль на акцию, TTM).
+ * Это НЕ полноценный Dividend Safety Score (для него нужен ещё тренд FCF
+ * за несколько лет, а T-Invest API отдаёт только текущий срез, и часто
+ * с нулевым FCF) — просто один честный сигнал на основе того, что реально
+ * заполняется в API.
+ *
+ *   <40%  — 🟢 запас прочности большой
+ *   40-70% — 🟡 платят большую часть прибыли
+ *   >70%  — 🔴 почти вся прибыль уходит на дивиденды — риск урезания
+ *   EPS ≤ 0 (убыток) или нет данных — «н/д», без ложной уверенности
+ */
+function dividendSafetyLabel_(dividendPerShare, assetUid) {
+  var fund = fetchAssetFundamentals_(assetUid);
+  if (!fund || !fund.epsTtm || fund.epsTtm <= 0) {
+    Logger.log('dividendSafetyLabel_(' + assetUid + '): нет пригодного epsTtm (fund=' +
+      (fund ? JSON.stringify(fund).substring(0, 200) : 'null') + ')');
+    return { payout: null, label: 'н/д', color: null };
+  }
+  var payout = dividendPerShare / fund.epsTtm;
+  var color  = payout < 0.4 ? '#1b5e20' : payout < 0.7 ? '#f57f17' : '#b71c1c';
+  return { payout: payout, label: (payout * 100).toFixed(0) + '%', color: color };
+}
+
+
 function fetchAnnualCoupon_(figi) {
   if (!figi) return { perUnit: 0, note: 'Нет FIGI' };
   try {
@@ -341,6 +456,93 @@ function fetchAnnualCoupon_(figi) {
 // ════════════════════════════════════════════════════════════════════
 // ДИВИДЕНДЫ ИЗ ИСТОРИИ ВЫПЛАТ (T-INVEST API) — автооценка
 // ════════════════════════════════════════════════════════════════════
+
+/**
+ * fetchDividendProjection_ — оценка дивиденда на акцию на ближайшие 12 месяцев.
+ *
+ * В отличие от fetchAnnualDividendFromHistory_() (плоская сумма факта за
+ * прошлые 12 месяцев), тянет историю выплат за ~4 года ОДНИМ запросом и:
+ *
+ *  - если есть минимум 2 полных календарных года истории — считает CAGR
+ *    (среднегодовой темп роста дивиденда) и проецирует его поверх
+ *    последнего полного года. Честнее для компаний со стабильно растущими
+ *    выплатами (Сбер, Лукойл и т.п.) — плоская оценка систематически
+ *    занижает будущий доход, если дивиденд из года в год растёт.
+ *  - если истории недостаточно (недавний листинг, нерегулярные выплаты)
+ *    — тихо откатывается на ту же плоскую сумму факта за 12 месяцев.
+ *  - CAGR искусственно ограничен диапазоном ±50% в год — иначе разовый
+ *    аномальный скачок (или пропуск выплаты в базовом году) экстраполируется
+ *    буквально и даёт нереалистичный прогноз.
+ */
+function fetchDividendProjection_(figi) {
+  if (!figi) return { perUnit: 0, trailing12: 0, note: 'Нет FIGI' };
+  try {
+    var now       = new Date();
+    var yearsBack = 4;
+    var from      = new Date(now.getTime() - yearsBack * 365 * 24 * 3600 * 1000);
+    var resp = tiFetch_(
+      '/tinkoff.public.invest.api.contract.v1.InstrumentsService/GetDividends',
+      { figi: figi, from: from.toISOString(), to: now.toISOString() }
+    );
+    var events = resp.dividends || [];
+    if (!events.length) return { perUnit: 0, trailing12: 0, note: 'Нет данных за ' + yearsBack + ' года' };
+
+    function dividendDate_(d) { return new Date(d.paymentDate || d.recordDate || d.lastBuyDate || now); }
+    function dividendAmount_(d) { return moneyToNumber_(d.dividendNet || d.dividendValue || null); }
+
+    // Плоская сумма факта за последние 12 мес. — как в старом методе, она же fallback
+    var ago12 = new Date(now.getTime() - 365 * 24 * 3600 * 1000);
+    var trailing12 = 0;
+    events.forEach(function(d) {
+      var dt = dividendDate_(d);
+      if (dt >= ago12 && dt <= now) trailing12 += dividendAmount_(d);
+    });
+
+    // Группировка по календарным годам для CAGR
+    var byYear = {};
+    events.forEach(function(d) {
+      var y = dividendDate_(d).getFullYear();
+      byYear[y] = (byYear[y] || 0) + dividendAmount_(d);
+    });
+
+    var currentYear   = now.getFullYear();
+    var completeYears = Object.keys(byYear).map(Number)
+      .filter(function(y) { return y < currentYear; })
+      .sort(function(a, b) { return a - b; });
+
+    if (completeYears.length >= 2) {
+      var firstYear = completeYears[0];
+      var lastYear  = completeYears[completeYears.length - 1];
+      var firstVal  = byYear[firstYear];
+      var lastVal   = byYear[lastYear];
+      var n         = lastYear - firstYear;
+
+      if (firstVal > 0 && lastVal > 0 && n > 0) {
+        var cagr = Math.pow(lastVal / firstVal, 1 / n) - 1;
+        cagr = Math.max(-0.5, Math.min(0.5, cagr)); // защита от аномальных скачков истории
+        var projected = lastVal * (1 + cagr);
+        if (projected > 0) {
+          return {
+            perUnit: projected,
+            trailing12: trailing12, // факт за 12 мес. — для Payout Ratio, не путать с прогнозом
+            note: 'CAGR-прогноз (' + completeYears.length + ' г., ' +
+                  (cagr >= 0 ? '+' : '') + (cagr * 100).toFixed(1) + '%/г)',
+          };
+        }
+      }
+    }
+
+    // Недостаточно истории для CAGR — плоская оценка по факту за 12 мес.
+    return {
+      perUnit: trailing12,
+      trailing12: trailing12,
+      note: trailing12 > 0 ? 'оценка (история, 12 мес.)' : 'Нет данных за 12 мес.',
+    };
+  } catch (e) {
+    return { perUnit: 0, trailing12: 0, note: 'Ошибка: ' + e.message.substring(0, 35) };
+  }
+}
+
 
 function fetchAnnualDividendFromHistory_(figi) {
   if (!figi) return { perUnit: 0, note: 'Нет FIGI' };
@@ -475,10 +677,10 @@ function addDividendsBlock() {
 function writeIncomeRow_(sh, row, data, idx, totalRub) {
   var bg     = idx % 2 === 0 ? C.EVEN : C.ODD;
   var pctPf  = (totalRub > 0 && data.valueRub > 0) ? data.valueRub / totalRub : 0;
-  sh.getRange(row, 1, 1, 7).setValues([[
+  sh.getRange(row, 1, 1, 8).setValues([[
     data.name, data.ticker, data.qty,
     data.incomePerUnit, data.incomeYear,
-    pctPf, data.note
+    pctPf, data.note, data.payoutText || ''
   ]]).setBackground(bg);
 
   sh.getRange(row, 3).setNumberFormat('0');
@@ -496,12 +698,20 @@ function writeIncomeRow_(sh, row, data, idx, totalRub) {
   // Подсветка источника цифры: зелёный — подтверждено вручную, жёлтый — оценка по истории
   var noteCell = sh.getRange(row, 7);
   var noteStr  = String(data.note || '');
-  if (noteStr.indexOf('оценка') === 0) {
+  if (noteStr.indexOf('оценка') === 0 || noteStr.indexOf('CAGR-прогноз') === 0) {
     noteCell.setBackground('#fff9c4').setFontColor('#f57f17').setFontStyle('italic');
   } else if (noteStr.indexOf('из Config') > -1) {
     noteCell.setBackground('#c8e6c9').setFontColor('#1b5e20');
   } else if (noteStr.indexOf('⚠️') > -1) {
     noteCell.setBackground('#ffcdd2').setFontColor('#b71c1c');
+  }
+
+  // Payout Ratio — своя колонка, свой светофор. Только у акций (data.payoutColor
+  // задан); у облигаций поле просто отсутствует, ячейка остаётся пустой.
+  if (data.payoutColor) {
+    sh.getRange(row, 8)
+      .setBackground(data.payoutColor).setFontColor('#ffffff')
+      .setFontWeight('bold').setHorizontalAlignment('center');
   }
 }
 

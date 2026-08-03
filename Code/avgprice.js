@@ -87,38 +87,38 @@ function redrawAvgPriceSection_() {
   let results = JSON.parse(raw);
   let params = readAdvancedParams_();
 
-  renderSection_(sh, AVGPRICE_SECTION_TITLE, function(sh, r, COLS) {
-    sh.getRange(r, 1).setValue('Акция');
-    sh.getRange(r, 2).setValue('Ср. цена');
-    sh.getRange(r, 3).setValue('Тек. цена');
-    sh.getRange(r, 4, 1, 2).merge().setValue('P/L, ₽ / %');
-    sh.getRange(r, 6).setValue('Примечание');
-    sh.getRange(r, 1, 1, COLS).setBackground(C.DARK).setFontColor('#ffffff').setFontWeight('bold');
+  renderSection_(sh, AVGPRICE_SECTION_TITLE, function(sh, r, COLS, colStart) {
+    sh.getRange(r, colStart).setValue('Акция');
+    sh.getRange(r, colStart + 1).setValue('Ср. цена');
+    sh.getRange(r, colStart + 2).setValue('Тек. цена');
+    sh.getRange(r, colStart + 3, 1, 2).merge().setValue('P/L, ₽ / %');
+    sh.getRange(r, colStart + 5).setValue('Примечание');
+    sh.getRange(r, colStart, 1, COLS).setBackground(C.DARK).setFontColor('#ffffff').setFontWeight('bold');
     r++;
 
     results.forEach(function(res, idx) {
       let bg = idx % 2 === 0 ? C.EVEN : C.ODD;
-      sh.getRange(r, 1).setValue(res.name).setBackground(bg);
+      sh.getRange(r, colStart).setValue(res.name).setBackground(bg);
 
       if (res.avgPrice > 0) {
-        sh.getRange(r, 2).setValue(res.avgPrice).setNumberFormat('#,##0.00 [$₽-ru-RU]').setBackground(bg);
-        sh.getRange(r, 3).setValue(res.curPrice).setNumberFormat('#,##0.00 [$₽-ru-RU]').setBackground(bg);
+        sh.getRange(r, colStart + 1).setValue(res.avgPrice).setNumberFormat('#,##0.00 [$₽-ru-RU]').setBackground(bg);
+        sh.getRange(r, colStart + 2).setValue(res.curPrice).setNumberFormat('#,##0.00 [$₽-ru-RU]').setBackground(bg);
         let clr = res.pl >= 0 ? C.OK : C.CRIT;
-        sh.getRange(r, 4, 1, 2).merge()
+        sh.getRange(r, colStart + 3, 1, 2).merge()
           .setValue(rub_(res.pl) + '  (' + (res.plPct * 100 >= 0 ? '+' : '') + (res.plPct * 100).toFixed(1) + '%)')
           .setFontColor(clr).setFontWeight('bold').setBackground(bg);
       } else {
-        sh.getRange(r, 2, 1, 4).merge().setValue('Нет истории сделок за ' + params.fifoYears + ' лет')
+        sh.getRange(r, colStart + 1, 1, 4).merge().setValue('Нет истории сделок за ' + params.fifoYears + ' лет')
           .setFontColor(C.SKIP).setFontStyle('italic').setBackground(bg);
       }
 
       let note = res.mismatch
         ? '⚠️ FIFO-кол-во (' + res.fifoQty + ') ≠ факт (' + res.qty + ')'
         : (res.opsFound + ' сделок в истории');
-      sh.getRange(r, 6).setValue(note)
+      sh.getRange(r, colStart + 5).setValue(note)
         .setFontColor(res.mismatch ? C.WARN : '#9e9e9e')
         .setFontStyle('italic').setFontSize(9).setBackground(bg);
       r++;
     });
-  });
+  }, 'left');
 }

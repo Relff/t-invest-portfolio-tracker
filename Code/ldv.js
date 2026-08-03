@@ -90,28 +90,28 @@ function redrawLdvSection_() {
   let results = JSON.parse(raw);
   let tz = Session.getScriptTimeZone();
 
-  renderSection_(sh, LDV_SECTION_TITLE, function(sh, r, COLS) {
-    sh.getRange(r, 1).setValue('Акция');
-    sh.getRange(r, 2).setValue('Есть льгота (шт.)');
-    sh.getRange(r, 3, 1, 2).merge().setValue('Пока нет льготы (шт.) / когда появится');
-    sh.getRange(r, 1, 1, COLS).setBackground(C.DARK).setFontColor('#ffffff').setFontWeight('bold');
+  renderSection_(sh, LDV_SECTION_TITLE, function(sh, r, COLS, colStart) {
+    sh.getRange(r, colStart).setValue('Акция');
+    sh.getRange(r, colStart + 1).setValue('Есть льгота (шт.)');
+    sh.getRange(r, colStart + 2, 1, 2).merge().setValue('Пока нет льготы (шт.) / когда появится');
+    sh.getRange(r, colStart, 1, COLS).setBackground(C.DARK).setFontColor('#ffffff').setFontWeight('bold');
     r++;
 
     results.forEach(function(res, idx) {
       let bg = idx % 2 === 0 ? C.EVEN : C.ODD;
-      sh.getRange(r, 1).setValue(res.name).setBackground(bg);
-      sh.getRange(r, 2).setValue(res.eligibleQty)
+      sh.getRange(r, colStart).setValue(res.name).setBackground(bg);
+      sh.getRange(r, colStart + 1).setValue(res.eligibleQty)
         .setFontColor(res.eligibleQty > 0 ? C.OK : '#9e9e9e').setFontWeight('bold').setBackground(bg);
 
       if (res.notYetQty > 0) {
         let dateStr = res.nextEligibleDate
           ? Utilities.formatDate(new Date(res.nextEligibleDate), tz, 'dd.MM.yyyy')
           : '—';
-        sh.getRange(r, 3, 1, 2).merge()
+        sh.getRange(r, colStart + 2, 1, 2).merge()
           .setValue(res.notYetQty + ' шт. — ближайший транш станет льготным ' + dateStr)
           .setFontColor(C.WARN).setBackground(bg);
       } else {
-        sh.getRange(r, 3, 1, 2).merge()
+        sh.getRange(r, colStart + 2, 1, 2).merge()
           .setValue('✅ Вся позиция уже под льготой')
           .setFontColor(C.OK).setBackground(bg);
       }
@@ -119,8 +119,8 @@ function redrawLdvSection_() {
     });
 
     r++;
-    sh.getRange(r, 1, 1, COLS).merge()
+    sh.getRange(r, colStart, 1, COLS).merge()
       .setValue('ℹ️ Продажа лотов «пока нет льготы» облагается НДФЛ на прибыль как обычно. Проверяй перед продажей, какие именно лоты списываются по FIFO.')
       .setFontColor('#9e9e9e').setFontStyle('italic').setFontSize(9);
-  });
+  }, 'right');
 }

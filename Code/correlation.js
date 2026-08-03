@@ -19,7 +19,7 @@
  */
 
 const CORR_PROP          = 'CORRELATION_DATA';
-const CORR_SHEET         = 'Корреляция акций';
+const CORR_SHEET         = '🔗 Корреляция акций';
 const CORR_DAYS_BACK     = 180;
 
 function calculateStockCorrelation() {
