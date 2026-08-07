@@ -63,6 +63,37 @@ function tiFetch_(path, body) {
       throw new Error('TINKOFF API ' + code + ': ' + resp.getContentText());
     } catch (e) { lastErr = e; }
   }
+
+  // ── Третий уровень fallback: личный прокси пользователя (опционально) ──
+  //
+  // Актуально, если у Т-Банка сейчас идёт переход на TLS-сертификаты НУЦ
+  // Минцифры РФ (см. developer.tbank.ru/eacq/intro/certificates/
+  // migration-russian-trusted-ca) — Apps Script физически не даёт настроить
+  // доверенные сертификаты (UrlFetchApp это не поддерживает), поэтому
+  // прямое подключение может не работать вообще, независимо от кода.
+  //
+  // Это НЕ общий прокси проекта — каждый пользователь поднимает СВОЙ,
+  // на СВОЁМ аккаунте (см. PROXY-SETUP.md), под собственным контролем.
+  // Если PROXY_URL не задан в Script Properties — этот блок просто
+  // пропускается, ничего не меняется для тех, у кого прямое подключение
+  // и так работает.
+  const proxyUrl = PropertiesService.getScriptProperties().getProperty('PROXY_URL');
+  if (proxyUrl) {
+    Logger.log('tiFetch_: прямое подключение не удалось, пробую личный прокси: ' + proxyUrl);
+    try {
+      const resp = UrlFetchApp.fetch(proxyUrl + '?path=' + encodeURIComponent(path), {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+        payload: JSON.stringify(body || {}),
+        muteHttpExceptions: true,
+      });
+      const code = resp.getResponseCode();
+      if (code >= 200 && code < 300) return JSON.parse(resp.getContentText());
+      lastErr = new Error('PROXY ' + code + ': ' + resp.getContentText());
+    } catch (e) { lastErr = e; }
+  }
+
   throw lastErr || new Error('Не удалось выполнить запрос к Invest API');
 }
 
