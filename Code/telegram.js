@@ -407,7 +407,16 @@ function getTelegramWebhookInfo() {
 function checkTelegramUpdates() {
   let deadline = new Date().getTime() + 50 * 1000; // запас 10 сек до следующего триггера
   while (new Date().getTime() < deadline) {
-    pollOnce_();
+    try {
+      pollOnce_();
+    } catch (e) {
+      // Точечный сетевой сбой (например "Address unavailable") — тихо
+      // логируем и ждём следующего цикла опроса, вместо того чтобы
+      // ронять весь триггер целиком и заваливать почту письмами от
+      // Google. Раз опрос всё равно идёт раз в минуту — один пропущенный
+      // цикл не критичен, бот просто ответит на следующей итерации.
+      Logger.log('checkTelegramUpdates: pollOnce_ упал, пропускаю цикл — ' + e.message);
+    }
     Utilities.sleep(5000);
   }
 }
@@ -419,10 +428,20 @@ function pollOnce_() {
   let props  = PropertiesService.getScriptProperties();
   let offset = Number(props.getProperty('TG_POLL_OFFSET') || 0);
 
-  let resp = UrlFetchApp.fetch(
-    'https://api.telegram.org/bot' + token + '/getUpdates?offset=' + offset + '&timeout=0',
-    { method: 'get', muteHttpExceptions: true }
-  );
+  let resp;
+  try {
+    resp = UrlFetchApp.fetch(
+      'https://api.telegram.org/bot' + token + '/getUpdates?offset=' + offset + '&timeout=0',
+      { method: 'get', muteHttpExceptions: true }
+    );
+  } catch (e) {
+    // muteHttpExceptions защищает только от HTTP-кодов ошибок (404, 500 и
+    // т.п.), но не от сетевых сбоев уровня "сервер не ответил вообще"
+    // (DNS, обрыв соединения) — такие исключения долетают досюда напрямую.
+    Logger.log('pollOnce_: сетевая ошибка при getUpdates — ' + e.message);
+    return;
+  }
+
   if (resp.getResponseCode() !== 200) {
     Logger.log('pollOnce_: getUpdates вернул ' + resp.getResponseCode() + ': ' + resp.getContentText());
     return;
@@ -511,7 +530,7 @@ function deleteTgMessage_(chatId, messageId) {
  * (а не только «Меню» → что-то ещё) тоже подчищает предыдущую карточку —
  * иначе Статус → ИИС-3 → Концентрация просто копится одно под другим.
  */
-const MENU_FAMILY_TOPICS_ = ['MENU', 'STATUS', 'IIS', 'HEALTH', 'PL'];
+const MENU_FAMILY_TOPICS_ = ['MENU', 'STATUS', 'IIS', 'HEALTH', 'PL', 'ABOUT'];
 
 /**
  * Удаляет все сообщения текущего «рабочего блока» (всё, что бот отправил
@@ -776,6 +795,11 @@ function routeMessage_(chatId, text, messageId) {
   if (text === '/pl' || text.indexOf('/pl ') === 0) {
     let arg = text.substring(3).trim();
     sendPlCard_(chatId, arg);
+    return;
+  }
+
+  if (text === '/about') {
+    sendTg_(chatId, aboutTrackerText_(), mainMenuKeyboard_(), { topicKey: 'ABOUT' });
     return;
   }
 
