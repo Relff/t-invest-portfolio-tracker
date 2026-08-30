@@ -1,3 +1,7 @@
+Простыми словами: этот трекер можно свободно скачивать, использовать, менять под себя и даже публиковать свой форк — но нельзя брать этот код и продавать как платный сервис/хостинг/консалтинг на его основе. Полный юридический текст ниже.
+
+/* Produced by Relferium — t-invest-portfolio-tracker */
+
 Commons Clause License Condition v1.0
 
 The Software is provided to you by the Licensor under the License, as defined
@@ -17,13 +21,13 @@ include this Commons Clause License Condition notice.
 
 Software:    T-Invest Portfolio Tracker
 License:     MIT License (below)
-Licensor:    Vladimir Kustyukov Andreevich
+Licensor:    Vladimir Kustyukov Andreevich (Relferium)
 
 ---
 
 MIT License
 
-Copyright (c) 2026 Vladimir Kustyukov Andreevich
+Copyright (c) 2026 Vladimir Kustyukov Andreevich (Relferium)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
