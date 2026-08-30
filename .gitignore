@@ -14,6 +14,11 @@ Thumbs.db
 .clasp.json
 .claspignore
 
+# Конфиги clasp с конкретными Script ID (template/personal) — personal
+# указывает на личный боевой скрипт, не для публичного репозитория.
+.clasp.template.json
+.clasp.personal.json
+
 # Временные и бэкап файлы
 *.tmp
 *.bak
