@@ -10,6 +10,7 @@
 
 const GOAL_PROP          = 'GOAL_PROGRESS_DATA';
 const GOAL_SECTION_TITLE = '▌ ПРОГРЕСС К ЦЕЛИ';
+/* Produced by Relferium — t-invest-portfolio-tracker */
 
 /**
  * Прогноз даты достижения цели — симуляция месяц за месяцем: текущий

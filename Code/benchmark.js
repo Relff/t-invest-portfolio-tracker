@@ -6,6 +6,7 @@
 
 const IMOEX_UID_PROPERTY = 'IMOEX_UID';
 const BENCH_YEARS_BACK   = 5;
+/* Produced by Relferium — t-invest-portfolio-tracker */
 
 const ANALYTICS_SECTION_TITLE = '▌ АНАЛИТИКА ДОХОДНОСТИ';
 const ANALYTICS_XIRR_PROP     = 'ANALYTICS_XIRR_VALUE';

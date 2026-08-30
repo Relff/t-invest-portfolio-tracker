@@ -8,6 +8,7 @@
 
 const XIRR_HELPER_SHEET = '_XIRR_calc';
 const XIRR_YEARS_BACK   = 5;
+/* Produced by Relferium — t-invest-portfolio-tracker */
 
 /**
  * Чистый расчёт XIRR без побочных эффектов (UI/Properties) — переиспользуется

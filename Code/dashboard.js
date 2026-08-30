@@ -139,9 +139,14 @@ function onOpen() {
         .addItem('🎯 Добавить блок цели портфеля', 'addGoalBlock')
         .addItem('🏭 Добавить блок секторов акций', 'addSectorsBlock'))
       .addSubMenu(ui.createMenu('🤖 Telegram')
-        .addItem('📡 Проверить подключение', 'testTelegramConnection'));
+        .addItem('📡 Проверить подключение', 'testTelegramConnection'))
+      .addItem('ℹ️ О трекере', 'showAboutTracker');
 
   menu.addToUi();
+}
+
+function showAboutTracker() {
+  SpreadsheetApp.getUi().alert(aboutTrackerText_());
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -330,6 +335,14 @@ function updateDashboard() {
   let sh = ss.getSheetByName(DST.DASHBOARD);
   if (!sh) sh = ss.insertSheet(DST.DASHBOARD);
 
+  // Версия трекера — пользователь сам вписывает и меняет её в этой ячейке
+  // (строка 3, колонка A), не в коде. Читаем ДО очистки листа и запишем
+  // обратно после пересборки — иначе ежедневный clearContents() стирал бы
+  // ручную правку. Если ячейка ещё пустая (первый запуск) — берём дефолт.
+  let versionCell = sh.getRange(3, 1);
+  let savedVersion = String(versionCell.getValue() || '').trim();
+  let trackerVersion = savedVersion || TRACKER_VERSION_DEFAULT;
+
   // clearContents()/clearFormats() НЕ снимают объединение ячеек — это
   // отдельное структурное свойство. Без явного breakApart() старое
   // объединение заголовка (ещё на 6 колонок, с прошлой версии) конфликтует
@@ -377,7 +390,16 @@ function updateDashboard() {
     .build();
   sh.getRange(r, 1, 1, FULL_W).merge().setRichTextValue(richText)
     .setBackground('#263238').setHorizontalAlignment('center');
-  r += 2;
+  r++;
+
+  // Версия трекера — можно менять прямо в этой ячейке (не в коде).
+  // "Версия" в updates.js читает именно отсюда, а не константу из кода —
+  // так уведомления об обновлении зависят от того, когда ТЫ решил, что
+  // обновился, а не от любой правки в самом коде.
+  sh.getRange(r, 1).setValue(trackerVersion)
+    .setFontSize(8).setFontColor('#9e9e9e').setFontStyle('italic')
+    .setNote('Версия трекера — меняй здесь вручную после того, как реально обновил файлы. Используется для проверки обновлений (updates.js).');
+  r++;
 
   mergedCell_(sh, r, 1, 1, COLS, '▌ РАСПРЕДЕЛЕНИЕ ПО КЛАССАМ',
     { bg: C.MID, fg: '#ffffff', bold: true });
@@ -466,14 +488,25 @@ function updateDashboard() {
 // ════════════════════════════════════════════════════════════════════
 
 function syncAndRefresh() {
-  syncTinkoffPositions();
-  updateDashboard();
-  updateIncomeSheet();
-  updateCalendarSheet();
-  hideDataSheets(false);
-  checkAndNotifyDeviations_();
-  checkIisDividendHint_();
-  notifySyncComplete_();
+  let t0 = new Date().getTime();
+  function lap_(label) {
+    let now = new Date().getTime();
+    Logger.log('syncAndRefresh: ' + label + ' — ' + ((now - t0) / 1000).toFixed(1) + ' сек от старта');
+  }
+
+  syncTinkoffPositions();       lap_('syncTinkoffPositions завершён');
+  updateDashboard();            lap_('updateDashboard завершён');
+  updateIncomeSheet();          lap_('updateIncomeSheet завершён');
+  updateCalendarSheet();        lap_('updateCalendarSheet завершён');
+  hideDataSheets(false);        lap_('hideDataSheets завершён');
+  checkAndNotifyDeviations_();  lap_('checkAndNotifyDeviations_ завершён');
+  checkIisDividendHint_();      lap_('checkIisDividendHint_ завершён');
+  const updateInfo = checkForUpdates_();
+  if (updateInfo.hasUpdate) {
+    SpreadsheetApp.getActive().toast('Доступна новая версия: ' + updateInfo.latestVersion, 'Обновление трекера', 10);
+  }
+  lap_('checkForUpdates_ завершён');
+  notifySyncComplete_();        lap_('notifySyncComplete_ завершён — всё готово');
 }
 
 

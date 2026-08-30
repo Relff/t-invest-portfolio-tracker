@@ -1,6 +1,8 @@
 const HEALTH_PROP          = 'HEALTH_CONCENTRATION_DATA';
 const HEALTH_SECTION_TITLE = '▌ HEALTH CHECK: КОНЦЕНТРАЦИЯ';
 
+/* Produced by Relferium — t-invest-portfolio-tracker */
+
 function calculateConcentrationHealth() {
   let config;
   try { config = readConfig_(); }
