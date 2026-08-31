@@ -2,5 +2,5 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-./push-template.sh
+./scripts/push-template.sh
 ./push-personal.sh
