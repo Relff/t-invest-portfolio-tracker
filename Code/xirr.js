@@ -1,9 +1,10 @@
 /**
- * xirr.js — Расчёт XIRR (доходность с учётом дат и сумм пополнений)
+ * xirr.js — Расчёт XIRR и простого результата за выбранный период
  *
- * Зависимости: getAccounts_(), fetchOperations_() — history.js
- *              readConfig_(), readPositions_() — dashboard.js
- *              redrawAnalyticsSection_(), ANALYTICS_XIRR_PROP — benchmark.js
+ * Зависимости:
+ *   getAccounts_(), fetchOperations_() — history.js
+ *   readConfig_(), readPositions_() — dashboard.js
+ *   redrawAnalyticsSection_(), ANALYTICS_XIRR_PROP — benchmark.js
  */
 
 const XIRR_HELPER_SHEET = '_XIRR_calc';
@@ -11,35 +12,132 @@ const XIRR_YEARS_BACK   = 5;
 /* Produced by Relferium — t-invest-portfolio-tracker */
 
 /**
- * Чистый расчёт XIRR без побочных эффектов (UI/Properties) — переиспользуется
- * как в calculateXIRR() (аналитика на Дашборде), так и в snapshot.js
- * (накопление истории XIRR по датам).
+ * Читает параметр:
+ *   XIRR — считать с даты | 22.06.2026
  *
- * Возвращает % годовых (число) или null, если данных недостаточно.
+ * Если строка отсутствует или значение пустое — возвращает null,
+ * и используется старое окно XIRR_YEARS_BACK.
  */
-function computeXirrValue_() {
+function readXirrStartDate_() {
+  let ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(DST.CONFIG);
+
+  if (!sh) return null;
+
+  let values = sh.getDataRange().getValues();
+
+  for (let i = 0; i < values.length; i++) {
+    let label = String(values[i][0] || '').trim();
+
+    if (label !== 'XIRR — считать с даты') {
+      continue;
+    }
+
+    let raw = values[i][1];
+
+    // Настоящая дата Google Sheets
+    if (raw instanceof Date && !isNaN(raw.getTime())) {
+      return raw;
+    }
+
+    // Текстовая дата ДД.ММ.ГГГГ
+    let text = String(raw || '').trim();
+    if (!text) return null;
+
+    let match = text.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+
+    if (!match) {
+      throw new Error(
+        'Некорректная дата XIRR: "' +
+        text +
+        '". Используйте формат ДД.ММ.ГГГГ.'
+      );
+    }
+
+    let day = Number(match[1]);
+    let month = Number(match[2]) - 1;
+    let year = Number(match[3]);
+
+    let date = new Date(year, month, day);
+
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== month ||
+      date.getDate() !== day
+    ) {
+      throw new Error('Некорректная дата XIRR: ' + text);
+    }
+
+    return date;
+  }
+
+  return null;
+}
+
+/**
+ * Полный расчёт статистики периода.
+ */
+function computeXirrStats_() {
   let ss = SpreadsheetApp.getActive();
 
-  let fromDate = new Date(new Date().getTime() - XIRR_YEARS_BACK * 365 * 24 * 3600 * 1000);
-  let toDate   = new Date();
+  let toDate = new Date();
+  let configuredStartDate = readXirrStartDate_();
+
+  let fromDate = configuredStartDate
+    ? configuredStartDate
+    : new Date(toDate.getTime() - XIRR_YEARS_BACK * 365 * 24 * 3600 * 1000);
+
+  if (fromDate >= toDate) {
+    throw new Error('Дата начала XIRR должна быть раньше сегодняшней даты.');
+  }
 
   let flows = [];
+  let totalInputs = 0;
+  let totalOutputs = 0;
 
   getAccounts_().forEach(function(acc) {
     let ops = fetchOperations_(acc.id, acc.name, fromDate, toDate);
+
     ops.forEach(function(op) {
-      if (op.type === 'OPERATION_TYPE_INPUT')  flows.push({ date: op.date, amount: -op.amount });
-      if (op.type === 'OPERATION_TYPE_OUTPUT') flows.push({ date: op.date, amount:  op.amount });
+      if (op.type === 'OPERATION_TYPE_INPUT') {
+        let amount = Math.abs(op.amount);
+        flows.push({ date: op.date, amount: -amount });
+        totalInputs += amount;
+      }
+
+      if (op.type === 'OPERATION_TYPE_OUTPUT') {
+        let amount = Math.abs(op.amount);
+        flows.push({ date: op.date, amount: amount });
+        totalOutputs += amount;
+      }
     });
   });
 
-  if (flows.length < 1) return null;
+  let config = readConfig_();
 
-  let config    = readConfig_();
-  let positions = readPositions_(config);
-  let totalRub  = positions.reduce(function(s, p) { return s + p.valueRub; }, 0);
+  // Только инвестиционный портфель. Ручные кэш-позиции не входят.
+  let positions = readPositions_(config).filter(function(p) {
+    return p.source !== 'Manual';
+  });
+
+  let totalRub = positions.reduce(function(s, p) { return s + p.valueRub; }, 0);
+
+  let profitRub = totalRub + totalOutputs - totalInputs;
+  let simpleReturnPct = totalInputs > 0 ? profitRub / totalInputs * 100 : null;
+
+  if (flows.length < 1) {
+    return {
+      xirrPct: null,
+      currentValue: totalRub,
+      totalInputs: totalInputs,
+      totalOutputs: totalOutputs,
+      profitRub: profitRub,
+      simpleReturnPct: simpleReturnPct,
+      startDate: fromDate
+    };
+  }
+
   flows.push({ date: toDate, amount: totalRub });
-
   flows.sort(function(a, b) { return a.date - b.date; });
 
   let sh = ss.getSheetByName(XIRR_HELPER_SHEET);
@@ -57,18 +155,68 @@ function computeXirrValue_() {
   let xirrValue = formulaCell.getValue();
   sh.hideSheet();
 
-  return typeof xirrValue === 'number' ? xirrValue * 100 : null;
+  let xirrPct = typeof xirrValue === 'number' ? xirrValue * 100 : null;
+
+  return {
+    xirrPct: xirrPct,
+    currentValue: totalRub,
+    totalInputs: totalInputs,
+    totalOutputs: totalOutputs,
+    profitRub: profitRub,
+    simpleReturnPct: simpleReturnPct,
+    startDate: fromDate
+  };
+}
+
+function computeXirrValue_() {
+  return computeXirrStats_().xirrPct;
 }
 
 function calculateXIRR() {
-  let pct = computeXirrValue_();
-  if (pct === null) {
-    SpreadsheetApp.getUi().alert('Недостаточно данных: нет ни одного пополнения за последние ' + XIRR_YEARS_BACK + ' лет, либо XIRR не удалось посчитать.');
+  let stats;
+  try {
+    stats = computeXirrStats_();
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('Ошибка расчёта XIRR: ' + e.message);
+    return;
   }
-  writeXirrToDashboard_(pct);
+
+  if (stats.xirrPct === null) {
+    SpreadsheetApp.getUi().alert('Недостаточно данных: после выбранной даты нет ни одного пополнения, либо XIRR не удалось посчитать.');
+  }
+
+  writeXirrToDashboard_(stats);
 }
 
-function writeXirrToDashboard_(xirrValue) {
-  let pct = typeof xirrValue === 'number' ? xirrValue : null;
-  PropertiesService.getScriptProperties().setProperty(ANALYTICS_XIRR_PROP, JSON.stringify({ value: pct }));
+function writeXirrToDashboard_(stats) {
+  let tz = Session.getScriptTimeZone();
+
+  if (typeof stats === 'number' || stats === null) {
+    stats = {
+      xirrPct: typeof stats === 'number' ? stats : null,
+      currentValue: null,
+      totalInputs: null,
+      totalOutputs: null,
+      profitRub: null,
+      simpleReturnPct: null,
+      startDate: null
+    };
+  }
+
+  let startDateStr = (stats.startDate instanceof Date && !isNaN(stats.startDate.getTime()))
+    ? Utilities.formatDate(stats.startDate, tz, 'dd.MM.yyyy')
+    : '';
+
+  PropertiesService.getScriptProperties().setProperty(
+    ANALYTICS_XIRR_PROP,
+    JSON.stringify({
+      value: stats.xirrPct,
+      startDate: startDateStr,
+      currentValue: stats.currentValue,
+      totalInputs: stats.totalInputs,
+      totalOutputs: stats.totalOutputs,
+      profitRub: stats.profitRub,
+      simpleReturnPct: stats.simpleReturnPct
+    })
+  );
 }
