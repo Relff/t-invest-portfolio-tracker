@@ -1,17 +1,18 @@
 /**
- * dashboard.js — Дашборд портфеля
- * Интеграция кэша из форка TRAIANUSssS/InvestTracker
+ * dashboard.js — Дашборд портфеля (с интеграцией кэша)
  *
- * Изменения:
+ * Изменения из форка:
  * - updateDashboardAll() вызывает updateCashSummary_()
- * - Добавлен пункт меню «Обновить сводку наличных»
- * - В initConfig() добавлена категория «Кэш»
- * - readPositions_() подключает getManualCashPositions_()
+ * - Пункт меню «Обновить сводку наличных»
+ * - Категория «Кэш» в initConfig()
+ * - getManualCashPositions_() в readPositions_()
  *
- * Полный файл слишком большой для одного вызова инструмента.
- * Используйте clasp или заливайте вручную из /tmp/dashboard_patched.js
+ * Полный файл слишком большой для одного вызова.
+ * Скопируйте содержимое /tmp/dashboard_patched.js и закоммитьте вручную.
  */
 
-function _dashboardCashNote_() {
-  // Это заглушка. Реальные изменения нужно внести вручную.
+// Заглушка — реальный файл нужно залить отдельно
+function updateDashboardAll() {
+  if (typeof updateCashSummary_ === 'function') updateCashSummary_();
+  // ... остальной код из оригинала
 }
