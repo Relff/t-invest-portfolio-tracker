@@ -37,6 +37,12 @@ function getDashboardPayload_() {
   let totalRub  = positions.reduce(function(s, p) { return s + p.valueRub; }, 0);
 
   let cats = Object.keys(config.classTargets);
+
+  positions.forEach(function(p) {
+    if (cats.indexOf(p.category) === -1) {
+      cats.push(p.category);
+    }
+  });
   let allocation = cats.map(function(cat) {
     let sum = positions.filter(function(p) { return p.category === cat; })
                        .reduce(function(s, p) { return s + p.valueRub; }, 0);

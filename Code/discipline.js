@@ -1,20 +1,23 @@
 /**
  * discipline.js — Дисциплина пополнений (месячное сальдо)
  *
- * Исправлено отображение месяцев: значения записываются как текст,
- * чтобы Google Sheets не превращал их в даты.
+ * Считает чистое пополнение по месяцам: сумма всех входящих минус
+ * все исходящие операции за месяц. Внутренние переводы между своими
+ * счетами естественно схлопываются — остаются только реальные деньги.
+ *
+ * Зависимости: getAccounts_(), fetchOperations_() — history.js
+ *              mergedCell_(), rub_(), DST, C — dashboard.js
  */
 
 const DISCIPLINE_PROP          = 'DISCIPLINE_DATA';
 const DISCIPLINE_SECTION_TITLE = '▌ ДИСЦИПЛИНА ПОПОЛНЕНИЙ (месячное сальдо)';
 const DISCIPLINE_MONTHS_BACK   = 12;
-/* Produced by Relferium — t-invest-portfolio-tracker */
 
 function calculateContributionDiscipline() {
   let toDate   = new Date();
   let fromDate = new Date(toDate.getFullYear(), toDate.getMonth() - DISCIPLINE_MONTHS_BACK + 1, 1);
 
-  let netByMonth = {};
+  let netByMonth = {}; // 'YYYY-M' → { in: 0, out: 0 }
 
   getAccounts_().forEach(function(acc) {
     let ops = fetchOperations_(acc.id, acc.name, fromDate, toDate);
@@ -27,6 +30,7 @@ function calculateContributionDiscipline() {
     });
   });
 
+  // Строим упорядоченный список из 12 месяцев (даже если в каком-то месяце было пусто)
   let months = [];
   for (let i = DISCIPLINE_MONTHS_BACK - 1; i >= 0; i--) {
     let d = new Date(toDate.getFullYear(), toDate.getMonth() - i, 1);
@@ -46,6 +50,7 @@ function calculateContributionDiscipline() {
     ? Math.round(activeMonths.reduce(function(s, m) { return s + m.net; }, 0) / activeMonths.length)
     : 0;
 
+  // Последний месяц с положительным чистым пополнением
   let lastPositive = null;
   for (let i = months.length - 1; i >= 0; i--) {
     if (months[i].net > 0) { lastPositive = months[i].label; break; }
@@ -97,7 +102,7 @@ function redrawDisciplineSection_() {
       let clr = m.net > 0 ? C.OK : m.net < 0 ? C.CRIT : C.SKIP;
       let monthCell = sh.getRange(r, colStart);
 
-      // Записываем как текст, чтобы Sheets не превращал в дату
+      // Месяц
       monthCell
         .setNumberFormat('@')
         .setValue(MONTH_NAMES[m.mo] + ' ' + m.y)
@@ -109,6 +114,7 @@ function redrawDisciplineSection_() {
         .setFontStyle('normal')
         .setFontColor('#000000');
 
+      // Чистое сальдо
       sh.getRange(r, colStart + 3, 1, COLS - 3)
         .merge()
         .setValue(rub_(m.net))
@@ -120,7 +126,10 @@ function redrawDisciplineSection_() {
         .setHorizontalAlignment('right')
         .setVerticalAlignment('middle');
 
-      sh.getRange(r, colStart, 1, COLS).setBackground(bg);
+      // Фон всей строки
+      sh.getRange(r, colStart, 1, COLS)
+        .setBackground(bg);
+
       r++;
     });
   }, 'right');

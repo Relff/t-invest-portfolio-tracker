@@ -1,9 +1,9 @@
 /**
  * charts.js — Визуализация для листа Dashboard
  *
- * Круговая и столбчатая диаграммы переехали в HTML-дашборд.
+ * Круговая и столбчатая диаграммы («Распределение портфеля», «Текущее vs
+ * Цель») переехали в HTML-дашборд (htmldashboard.js).
  * Здесь остаются текстовые прогресс-бары по акциям.
- * Полные названия больше не обрезаются.
  */
 
 function addDashboardCharts() {
@@ -38,6 +38,7 @@ function extractStockData_(data) {
 
     if (inStockSection && col0 && row[2] > 0) {
       result.push({
+        // Полное название: больше не обрезаем длинные инструменты через «…».
         name: col0,
         actual: Number(row[3] || 0) * 100,
         target: Number(row[4] || 0) * 100,
@@ -90,6 +91,9 @@ function buildStockProgress_(sh, stockData, startRow) {
   });
 }
 
+/**
+ * Разовая уборка старых диаграмм на листе Дашборд.
+ */
 function removeAllCharts() {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(DST.DASHBOARD);
@@ -104,6 +108,7 @@ function removeAllCharts() {
 
   SpreadsheetApp.getUi().alert(
     '✅ Удалено диаграмм: ' + count +
-    '. Больше графики на этом листе не создаются — смотри их в HTML-дашборде.'
+    '. Больше графики на этом листе не создаются — смотри их в HTML-дашборде ' +
+    '(Tinkoff → 📊 Ребаланс и отчёты → Открыть HTML-дашборд).'
   );
 }
