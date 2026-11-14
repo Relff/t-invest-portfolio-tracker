@@ -397,6 +397,8 @@ Code/
 
 Построен на базе [T-Invest API](https://developer.tbank.ru/invest/intro) и Google Apps Script.
 
+Благодарность kolay (TRAIANUSssS) за вклад в учёт наличных и денежных активов вне брокера, а также за доработки XIRR и дашборда.
+
 ---
 
 ## ❤️ Поддержать автора
